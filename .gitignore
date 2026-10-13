@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+data/
+receipts/
+node_modules/
+*.sqlite*
+*.wav
+*.mp3
+*.mp4
+*.webm

@@ -1,0 +1,12 @@
+{
+  "template": {
+    "repo": "humanitylabs-org/wizard-app-manager",
+    "commit": "5a34c455e2bcb47864951f88facf42223e96a15d",
+    "license": "GPL-3.0-only"
+  },
+  "recorder": {
+    "source": "committed meetings recorder code",
+    "commit": "3bea8cd14f8954f0d981716a07abbe060cc4371a"
+  },
+  "upload": "API upload workflow reimplemented without owner-specific routing/configuration"
+}

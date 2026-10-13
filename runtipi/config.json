@@ -1,0 +1,17 @@
+{
+  "name": "Meeting Recorder", "id": "meeting-recorder", "wizard_type": "service",
+  "available": true, "short_desc": "Record meetings and search shared-transcriber transcripts.",
+  "author": "Humanity Labs", "port": 8808, "categories": ["utilities"],
+  "description": "Empty-by-default recorder with notes, browser/native capture, audio upload, HTTP API, MCP and shared transcription.",
+  "tipi_version": 1, "version": "0.1.0", "source": "https://github.com/humanitylabs-org/meeting-recorder",
+  "exposable": false, "supported_architectures": ["amd64", "arm64"],
+  "created_at": 1791850000000, "updated_at": 1791850000000,
+  "dynamic_config": true, "min_tipi_version": "4.8.0", "uid": 1000, "gid": 1000,
+  "form_fields": [
+    {"type":"text","label":"Shared transcription slot API","env_variable":"TRANSCRIPTION_URL","required":true,"default":"http://transcriber:8000/v1/audio/transcriptions","hint":"Resolve the selected transcription provider from apps.json. Use its container-network endpoint; no model is bundled."},
+    {"type":"text","label":"Shared transcription model","env_variable":"TRANSCRIPTION_MODEL","required":true,"default":"Systran/faster-whisper-small"},
+    {"type":"text","label":"Trusted Wizard origins","env_variable":"MEETINGS_ALLOWED_ORIGINS","required":false,"hint":"Comma-separated exact browser origins for your Wizard shell."},
+    {"type":"text","label":"Trusted Wizard hostnames","env_variable":"MEETINGS_ALLOWED_HOSTS","required":false,"hint":"Comma-separated Host headers forwarded by your installed Wizard shell."},
+    {"type":"text","label":"Timezone","env_variable":"MEETINGS_TIMEZONE","required":true,"default":"UTC"}
+  ], "no_gui": false
+}

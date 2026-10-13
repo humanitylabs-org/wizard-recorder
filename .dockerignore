@@ -1,0 +1,13 @@
+*
+!app/
+!app/server.py
+!app/package_routes.py
+!app/audio_playback.py
+!app/requirements.txt
+!web/
+!web/*.html
+!web/*.js
+!web/*.css
+!web/*.svg
+!web/*.png
+!web/*.webmanifest

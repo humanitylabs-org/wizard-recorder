@@ -4,7 +4,7 @@
   const root = document.documentElement;
   const names = ['canvas','surface','surface-raised','text','text-secondary','text-muted','border','accent','accent-soft','on-accent','reader-surface'];
   const fallback = {canvas:'#05030c',surface:'rgba(18,12,38,.58)','surface-raised':'rgba(28,19,58,.92)',text:'#f3efff','text-secondary':'#b9b0d8','text-muted':'#a59abf',border:'rgba(205,190,255,.24)',accent:'#b99bff','accent-soft':'rgba(143,99,255,.16)','on-accent':'#160b32','reader-surface':'#0e0919'};
-  const trustedHost = location.origin; // Preview only. Installed app manifest supplies its exact trusted host origin.
+  const trustedHosts = new Set([location.origin, ...(window.WizardAppHosts || [])]);
   let current = null, connected = false;
   function valid(a) {
     if (!a || a.version !== 1 || !Number.isSafeInteger(a.revision) || a.revision < 0) return false;
@@ -28,9 +28,9 @@
   }
   apply({version:1,revision:0,skin:'nebula',presentation:'standalone',colorScheme:'dark',comparison:'unified',tokens:fallback});
   addEventListener('message',e => {
-    if (parent===window || e.source!==parent || e.origin!==trustedHost || e.data?.type!=='wizard:appearance') return;
-    if (apply(e.data.appearance)) { connected=true; parent.postMessage({type:'wizard:appearance:ack',version:1,revision:current.revision},trustedHost); }
+    if (parent===window || e.source!==parent || !trustedHosts.has(e.origin) || e.data?.type!=='wizard:appearance') return;
+    if (apply(e.data.appearance)) { connected=true; parent.postMessage({type:'wizard:appearance:ack',version:1,revision:current.revision},e.origin); }
   });
   window.WizardTheme={get current(){return current},get connected(){return connected},version:1};
-  if (parent!==window) parent.postMessage({type:'wizard:appearance:ready',version:1,app:root.dataset.app||'unknown'},trustedHost);
+  if (parent!==window) for (const origin of trustedHosts) parent.postMessage({type:'wizard:appearance:ready',version:1,app:root.dataset.app||'unknown'},origin);
 })();

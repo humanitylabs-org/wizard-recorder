@@ -16,7 +16,7 @@ The repo-qualified private install route is supported today. Short-name installa
 
 ## Use
 
-Open the installed app in Wizard. Start a meeting and grant microphone access; write notes during or after recording. Upload audio using the quiet sidebar control. The server accepts raw uploads up to 100 MiB and decodes up to one hour into 30-second WAV chunks before using the same shared-transcription queue. Transcripts are searchable and exportable as Markdown; audio remains playable.
+Open the installed app in Wizard. Start a meeting and grant microphone access; write notes during or after recording. Upload audio using the quiet sidebar control. The server accepts raw uploads up to 100 MiB and six hours, then decodes them into 30-second WAV chunks before using the same shared-transcription queue. Transcripts are searchable and exportable as Markdown; audio remains playable.
 
 Plain notes and transcripts work without a notes model. Optional notes enhancement/Ask uses owner-configured MEETINGS_LLM_URL, MEETINGS_LLM_MODEL and MEETINGS_LLM_KEY. Missing configuration returns an explicit 503 rather than pretending that a model ran. Calendar, Mizel imports and Anarlog imports are intentionally empty in this portable package; the original host service stays unchanged.
 
@@ -26,7 +26,7 @@ Plain notes and transcripts work without a notes model. Optional notes enhanceme
 - HTTP API documented in `openapi.json` and `API.md`.
 - Stateless Streamable HTTP MCP at `/mcp`; six tools documented in `SKILL.md`.
 - SQLite, notes, transcript segments and audio chunks under `/data`, mapped to this app's persistent app-data volume. No owner/home or secret mounts.
-- Native bridge: existing `wizardNative.meetings` start/stop/on callback contract remains; start also receives the installed view's `apiBaseUrl`. Actual device-native routing must honor that address. Browser capture is the independently testable path.
+- Native bridge: existing `wizardNative.meetings` start/stop/on callback contract remains; start also receives the installed view's `apiBaseUrl`. The existing bridge is selected only when it declares `capabilities.apiBaseUrl=true`; older bridges use browser capture to keep this installed app separate from the host recorder. Device-native routing remains a separate capability check.
 - Host and Origin fences require explicit shell origins and hostnames at install; app requests cannot select arbitrary filesystem input or remote audio URLs.
 - The existing two-pane recorder/editor layout and serif document type are retained. The template's appearance v1 client supplies colors, transparent hosted canvas and live updates. Dark standalone fallback; all five accepted skins supported.
 - App Back is exposed as the shell's canonical `__wizardCloseOverlay` hook and the native `__wosNativeBack` hook; nested Back returns to the list and root Back is consumed.

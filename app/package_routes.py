@@ -53,6 +53,11 @@ def install_routes(app):
                 raise HTTPException(r.status_code, r.text[:200])
             return r.json()
 
+    @app.get('/config.js')
+    async def config_js():
+        import server
+        return Response('window.WizardAppHosts='+json.dumps(sorted(server.ALLOWED_ORIGINS))+';', media_type='text/javascript')
+
     @app.get('/healthz')
     async def healthz():
         return {"ok": True, "app": "meeting-recorder", "version": "0.1.0"}

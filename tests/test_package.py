@@ -59,6 +59,9 @@ def test_chunks_notes_and_stop(tmp_path):
             assert (await c.post(endpoint+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes())).status_code==200
         assert (await c.post(endpoint+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes(200))).status_code==409
         assert (await c.post(endpoint+'/chunks?source=bad&seq=1&start_ms=1000',content=wav_bytes())).status_code==400
+        assert (await c.post(endpoint+'/chunks?source=me&seq=-1&start_ms=0',content=wav_bytes())).status_code==400
+        assert (await c.post(endpoint+'/chunks?source=me&seq=1&start_ms=999999999999',content=wav_bytes())).status_code==400
+        assert (await c.post(endpoint+'/chunks?source=me&seq=1&start_ms=1000',content=b'RIFF'+b'x'*2000000)).status_code==413
         assert (await c.get(endpoint+'/audio.wav')).content[:4]==b'RIFF'
         assert (await c.post(endpoint+'/stop',json={'final_seq':{'me':0}})).status_code==200
         assert (await c.post(endpoint+'/stop',json={})).status_code==200
@@ -80,7 +83,12 @@ def test_mcp_tools(tmp_path):
         assert (await rpc('tools/call',{'name':'get_meeting','arguments':{'id':'../secret'}}))['error']['code']==-32602
         m=(await rpc('tools/call',{'name':'start_recording','arguments':{'title':'MCP meeting'}}))['result']['structuredContent']
         assert m['capture']=='awaiting_device'
-        await rpc('tools/call',{'name':'stop_recording','arguments':{'id':m['id']}})
+        assert not (await c.post('/api/meetings/'+m['id']+'/capture',json={})).json()['stop_requested']
+        stopped=(await rpc('tools/call',{'name':'stop_recording','arguments':{'id':m['id']}}))['result']['structuredContent']
+        assert stopped['capture']=='awaiting_device_ack'
+        assert (await c.post('/api/meetings/'+m['id']+'/capture',json={})).json()['stop_requested']
+        assert (await c.get('/api/meetings/'+m['id'])).json()['status']=='recording'
+        await c.post('/api/meetings/'+m['id']+'/stop',json={})
         value=(await rpc('tools/call',{'name':'get_transcript','arguments':{'id':m['id']}}))['result']
         assert value['structuredContent']['text']=='' and not value['isError']
         assert (await rpc('tools/call',{'name':'get_meeting','arguments':{'id':'missing-id'}}))['result']['isError']

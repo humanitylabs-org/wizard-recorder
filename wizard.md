@@ -33,7 +33,7 @@ view:
 provides: [meeting-recording, meeting-transcripts]
 system: false
 uses: [transcriber]
-needs: []
+needs: [mic]
 health: /healthz
 ---
 

@@ -293,7 +293,7 @@ async def run_enhance(mid: str, template: str) -> None:
             c.execute("UPDATE meetings SET enhanced_json=?, enhance_state='idle', enhance_error=NULL, title=?, updated_at=? WHERE id=?",
                       (json.dumps(enhanced), new_title, now_iso(), mid))
             reindex(c, mid)
-        # Hand the recap to the agent this app routes through (Wizard "Routes through"; spec/AGENTS.md section 5).
+        # Hand the recap to the agent this app routes through (Wizard "Routes through"; spec/AGENTS.md section 7).
         edition = hashlib.sha256(md.encode()).hexdigest()[:12]
         if agent_delivery.Outbox(DATA).queue(mid, new_title, md.replace(USER_MARK, ""), edition):
             start_bg(agent_delivery.Outbox(DATA).flush())

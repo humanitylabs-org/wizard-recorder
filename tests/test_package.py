@@ -109,3 +109,32 @@ def test_transcription_contract_and_errors(tmp_path):
         assert (await c.post('/api/uploads',content=b'not audio')).status_code==415
         assert (await c.get('/api/meetings')).json()['meetings']==[]
     run_test(tmp_path,test)
+
+
+def test_recap_goes_to_bound_agent_and_waits_when_down(tmp_path, monkeypatch):
+    import agent_delivery
+    monkeypatch.setenv('WIZARD_DELIVERY_URL', 'http://wizard/wizard/v1/apps/meeting-recorder/deliveries')
+    monkeypatch.setenv('WIZARD_DELIVERY_TOKEN', 'app-token-0123456789abcdefghijkl')
+    seen, up = [], {'ok': False}
+    def handler(request):
+        seen.append((request.headers['authorization'], __import__('json').loads(request.content)))
+        if not up['ok']:
+            return httpx.Response(503, json={'error': 'bound_agent_unavailable', 'check': 'app.binding.agent_running'})
+        return httpx.Response(200, json={'verified': True, 'already_delivered': False, 'session_id': 's', 'agent': {'id': 'x', 'label': 'Private'}})
+    box = agent_delivery.Outbox(tmp_path)
+    assert box.queue('m1', 'Team sync', '# Recap', 'e1')['delivery_key'] == 'meeting-m1-e1'
+    box.queue('m1', 'Team sync', '# Recap', 'e1')   # same edition queued once
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            assert await box.flush(c) == 0
+            assert box.status()['waiting'] == 1 and '503' in box.status()['last_error']
+            up['ok'] = True
+            assert await box.flush(c) == 1
+            assert await box.flush(c) == 0
+    asyncio.run(go())
+    assert box.status() == {'configured': True, 'delivered': 1, 'waiting': 0, 'last_error': ''}
+    auth, body = seen[-1]
+    assert auth == 'Bearer app-token-0123456789abcdefghijkl'
+    assert body['delivery_key'] == 'meeting-m1-e1' and body['thread'] == 'meeting-recaps' and 'agent' not in body
+    monkeypatch.delenv('WIZARD_DELIVERY_URL')
+    assert agent_delivery.Outbox(tmp_path / 'x').queue('m2', 't', 'b', 'e') is None   # standalone: nothing queued

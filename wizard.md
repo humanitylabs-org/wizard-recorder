@@ -34,6 +34,9 @@ provides: [meeting-recording, meeting-transcripts]
 system: false
 uses: [transcriber]
 needs: [mic]
+agent_binding:
+  required: false
+  purpose: Where your meeting recaps go
 health: /healthz
 ---
 
@@ -41,4 +44,4 @@ health: /healthz
 
 Start a recording, write notes, upload an audio file, read and search the transcript. The shared transcription provider does the speech recognition; this app contains no model. It starts empty and keeps SQLite, audio and notes in its own app-data volume. Uninstall preserves that volume.
 
-The view inherits Wizard appearance v1 and keeps Back inside the app. Native capture remains available through the existing Wizard recorder bridge; browser capture works without a native shell. Optional OpenAI-compatible notes enhancement uses owner-supplied configuration only.
+The view inherits Wizard appearance v1 and keeps Back inside the app. Native capture remains available through the existing Wizard recorder bridge; browser capture works without a native shell. Optional OpenAI-compatible notes enhancement uses owner-supplied configuration only. Finished recaps go to the agent this app routes through (chosen in Wizard, the main agent by default) through the Wizard delivery endpoint; the app never names an agent, and a bound agent that is down keeps recaps queued (`GET /api/agent-delivery`).

@@ -21,6 +21,39 @@
         }
       }
     },
+    "/api/agent-delivery": {
+      "get": {
+        "summary": "Recap delivery status",
+        "description": "Recaps delivered to the agent this app routes through, and how many are waiting (a bound agent that is down keeps them waiting).",
+        "operationId": "agent_delivery_status_api_agent_delivery_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "delivered": {
+                      "type": "integer"
+                    },
+                    "waiting": {
+                      "type": "integer"
+                    },
+                    "last_error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings": {
       "get": {
         "summary": "List Meetings",

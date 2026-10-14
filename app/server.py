@@ -23,6 +23,8 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
+import agent_delivery
+
 DATA_ROOT = Path(os.environ.get("MEETINGS_DATA", "/data"))
 DATA = DATA_ROOT
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -291,6 +293,10 @@ async def run_enhance(mid: str, template: str) -> None:
             c.execute("UPDATE meetings SET enhanced_json=?, enhance_state='idle', enhance_error=NULL, title=?, updated_at=? WHERE id=?",
                       (json.dumps(enhanced), new_title, now_iso(), mid))
             reindex(c, mid)
+        # Hand the recap to the agent this app routes through (Wizard "Routes through"; spec/AGENTS.md section 5).
+        edition = hashlib.sha256(md.encode()).hexdigest()[:12]
+        if agent_delivery.Outbox(DATA).queue(mid, new_title, md.replace(USER_MARK, ""), edition):
+            start_bg(agent_delivery.Outbox(DATA).flush())
     except Exception as exc:  # noqa: BLE001
         log.exception("enhance failed for %s", mid)
         with closing(db()) as c:
@@ -667,6 +673,19 @@ async def _startup() -> None:
         c.execute("UPDATE meetings SET enhance_state='idle' WHERE enhance_state='running'")
     start_bg(transcription_worker(_stop))
     start_bg(_import_loop())
+    start_bg(_delivery_loop())
+
+
+async def _delivery_loop() -> None:
+    while not _stop.is_set():
+        try:
+            await agent_delivery.Outbox(DATA).flush()
+        except Exception:  # noqa: BLE001
+            log.exception("agent delivery pass failed")
+        try:
+            await asyncio.wait_for(_stop.wait(), agent_delivery.RETRY_S)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _import_loop() -> None:
@@ -718,6 +737,12 @@ def _mid(mid: str) -> str:
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/api/agent-delivery")
+async def agent_delivery_status():
+    """Where recaps stand: delivered / waiting (a bound agent that is down keeps them waiting)."""
+    return agent_delivery.Outbox(DATA).status()
 
 
 @app.get("/api/meetings")

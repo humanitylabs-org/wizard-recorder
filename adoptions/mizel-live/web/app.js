@@ -579,7 +579,7 @@ function renderStatus(m) {
   const r = state.rec?.meetingId === m.id ? state.rec : null;
   if (r?.phase === 'error') {
     kids.push(h('div', { class: 'w-notice is-danger' }, h('span', { class: 'msg', text: r.error || 'Recording failed to start.' }),
-      h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Try again', onclick: () => state.rec?.engine?.result ? stopRecording() : beginRecording({}) }),
+      h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Try again', onclick: retryRecording }),
       h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'End meeting', onclick: () => finishWithoutAudio(m) })));
   } else if (m.status === 'recording' && !r && justStoppedHere(m)) {
     kids.push(h('div', { class: 'w-notice is-accent' }, h('span', { class: 'w-spinner' }), h('span', { class: 'msg', text: 'Saving the last of the recording…' })));
@@ -1210,6 +1210,23 @@ function onNativeState(s, eng) {
     void stopRecording({reason:s.pausedMs >= (s.pauseTimeoutMs||PAUSE_LIMIT_MS)-1000 ? 'pause_timeout' : 'user'});
   }
 }
+// Retry reattaches the retained capture; it never creates or cancels a replacement.
+async function retryRecording() {
+  const r=state.rec, engine=r?.engine;
+  if(r?.phase!=='error')return;
+  if(engine?.result)return stopRecording();
+  if(!engine?.captureId)return beginRecording({});
+  r.phase='starting';r.error=null;engine.detach();renderPill();
+  try {
+    await engine.start({systemAudio:false});
+    if(state.rec!==r)return;
+    r.phase='recording';r.paused=!!engine.info.paused;
+    if(engine.info.phase==='error'||engine.info.inputStopped){r.phase='error';await stopRecording();return;}
+    live.start(r.meetingId,r.title||'',{follow:engine.native&&!engine.livePcm});
+  }catch(e){if(state.rec===r){r.phase='error';r.error=errMsg(e);}}
+  if(state.rec!==r)return;
+  renderRecBanner();renderPill();notifyNative();if(state.current?.id===r.meetingId)renderDoc();
+}
 // Rebind fresh app observers after iframe reload. The shell retains the physical recorder and PCM custody.
 async function reattachShared() {
   if(state.rec)return;
@@ -1233,7 +1250,7 @@ async function reattachShared() {
       await engine.acknowledge();endRecSession();void reattachShared();
     }
     renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();
-  }catch(e){if(state.rec){state.rec.phase='error';state.rec.error=errMsg(e);renderPill();renderRecBanner();if(state.current?.id===state.rec.meetingId)renderDoc();}toast('Capture retained: '+errMsg(e),{error:true,action:{label:'Retry save',fn:()=>stopRecording()}});}
+  }catch(e){if(state.rec){state.rec.phase='error';state.rec.error=errMsg(e);renderPill();renderRecBanner();if(state.current?.id===state.rec.meetingId)renderDoc();}toast('Capture retained: '+errMsg(e),{error:true,action:{label:'Retry save',fn:retryRecording}});}
 }
 
 async function toggleSystemAudio() {

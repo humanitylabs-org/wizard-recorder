@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { TinfoilProvider, parseSummaryDelta } from './provider.js';
 import { OrbEvents, discussionMarkdown } from './orb-events.mjs';
+import { queueAuthority, threadMessages } from './orb-authority.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME;
@@ -38,10 +39,11 @@ const FOLLOW_IDLE_CLOSE_MS = 45 * 60 * 1000;
 const STATE_PATH = path.join(DATA, 'state.json');
 const LOG_PATH = path.join(DATA, 'events.jsonl');
 const orbEvents = new OrbEvents(path.join(DATA, 'orb-events.json'));
+const verifyOrbDelivery = await queueAuthority(process.env.WIZARD_ORB_QUEUE_DB);
 async function orbRead(route,row){const query=row.agent?`${route.includes('?')?'&':'?'}agent=${encodeURIComponent(row.agent)}`:'';
   const r=await fetch(ORB_API+route+query,{headers:{Authorization:`Bearer ${secrets.API_SERVER_KEY}`},signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Existing orb read unavailable');return r.json();}
-async function orbMessages(row){const rows=[];for(let offset=0;offset<2000;offset+=200){const page=await orbRead(`/api/sessions/${encodeURIComponent(row.threadId)}/messages?limit=200&offset=${offset}&order=latest`,row);rows.push(...(page.data||page.messages||[]));if(!page.has_more)return rows;}return [];}
-setInterval(() => void orbEvents.refresh((id,row)=>orbRead(`/v1/runs/${encodeURIComponent(id)}`,row),orbMessages), 5000).unref();
+async function orbMessages(row){return threadMessages(orbRead,row);}
+setInterval(() => void orbEvents.refresh((id,row)=>orbRead(`/v1/runs/${encodeURIComponent(id)}`,row),orbMessages,verifyOrbDelivery), 5000).unref();
 
 function readEnvFile(file, keys) {
   const out = {};

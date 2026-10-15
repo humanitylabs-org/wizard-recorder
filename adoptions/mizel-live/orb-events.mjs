@@ -8,7 +8,7 @@ function audioReferences(message) {
   const match=/\[WIZARD_FILES_V1\]\s*(\[[\s\S]*?\])\s*\[\/WIZARD_FILES_V1\]/.exec(text);
   try{return match?JSON.parse(match[1]).map(f=>f.id):[];}catch{return [];}
 }
-const statuses = ['paused','captured','queued','failed','unconfirmed','sent','cancelled','local','answered'];
+const statuses = ['paused','captured','queued','failed','unconfirmed','sent','cancelled','local'];
 export class OrbEvents {
   constructor(file) {
     this.file=file; this.rows={}; this.refreshing=false;
@@ -29,7 +29,8 @@ export class OrbEvents {
     if(old && value.clientRevision<=old.clientRevision) return old;
     const row={...(old||{}),id:value.id,meetingId:value.meetingId,captureId:value.captureId,atMediaMs:value.atMediaMs,clientRevision:value.clientRevision,revision:(old?.revision||0)+1};
     for(const key of ['voiceTakeId','deliveryKey','threadId','runId','audioFileId']) if(value[key]!=null){if(!id(value[key]))throw Error('Invalid '+key);row[key]=value[key];}
-    if(value.userMessageId!=null){if(!messageId(value.userMessageId))throw Error('Invalid message id');row.userMessageId=value.userMessageId;}
+    // Caller IDs are hints, never proof of an accepted message. Only refresh binds them.
+    if(value.userMessageId!=null && !messageId(value.userMessageId))throw Error('Invalid message id');
     if(value.agent!=null){if(value.agent!==''&&!id(value.agent))throw Error('Invalid agent');row.agent=value.agent;}
     row.steered=value.steered===true;
     for(const key of ['pausedAt','endedAt']) if(value[key]!=null){if(!Number.isSafeInteger(value[key])||value[key]<0)throw Error('Invalid '+key);row[key]=value[key];}
@@ -41,24 +42,31 @@ export class OrbEvents {
     this.save({...this.rows,[row.id]:row});return row;
   }
   list(mid) {return Object.values(this.rows).filter(r=>r.meetingId===mid).sort((a,b)=>a.atMediaMs-b.atMediaMs||a.id.localeCompare(b.id));}
-  async refresh(readRun, readMessages) {
+  async refresh(readRun, readMessages, verifyDelivery) {
     if(this.refreshing)return;this.refreshing=true;
     try {for(const row of Object.values(this.rows)) {
-      if(!row.runId||row.status==='cancelled')continue;
+      if(!row.runId||!row.threadId||!row.deliveryKey||row.status==='cancelled'||row.steered)continue;
       try {
+        // Verify against server-owned admission, before reading selected thread history.
+        // A steer flag cannot authorize projection of another request's response.
+        if(verifyDelivery && !(await verifyDelivery(row)))continue;
+        const run=await readRun(row.runId,row);
+        if((run.session_id||run.sessionId)!==row.threadId)continue;
+        if(!verifyDelivery && run.idempotency_key!==row.deliveryKey)continue;
+        if(run.idempotency_key && run.idempotency_key!==row.deliveryKey)continue;
         if(!row.userMessageId && row.audioFileId && readMessages){
-          const matches=(await readMessages(row)).filter(m=>m.role==='user'&&audioReferences(m).includes(row.audioFileId));
+          const messages=await readMessages(row);
+          if(this.rows[row.id].clientRevision!==row.clientRevision)continue;
+          const matches=messages.complete===false?[]:messages.filter(m=>m.role==='user'&&audioReferences(m).includes(row.audioFileId));
           if(matches.length===1&&messageId(matches[0].id??matches[0].message_id)){
             const current=this.rows[row.id];this.save({...this.rows,[row.id]:{...current,userMessageId:matches[0].id??matches[0].message_id,revision:current.revision+1}});
           }
         }
         if(row.status==='answered'||row.runTerminal)continue;
-        const run=await readRun(row.runId,row);
-        // Correlate to an EXISTING run; never infer a thread or issue a retry/send.
-        if((run.session_id||run.sessionId)!==row.threadId)continue;
-        if(run.idempotency_key && !row.steered && run.idempotency_key!==row.deliveryKey)continue;
+
         if(!['completed','failed','cancelled','interrupted'].includes(run.status))continue;
         const current=this.rows[row.id];
+        if(current.clientRevision!==row.clientRevision || current.status==='cancelled')continue;
         const update={...current,revision:current.revision+1,runTerminal:true,updatedAt:new Date().toISOString(),status:run.status==='completed'?'answered':'failed',answer:run.status==='completed'?String(run.output||'').slice(0,12000):'',error:run.status==='completed'?'':'Existing run ended '+run.status};
         if(messageId(run.user_message_id))update.userMessageId=run.user_message_id;
         if(messageId(run.answer_message_id))update.answerMessageId=run.answer_message_id;

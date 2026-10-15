@@ -16,6 +16,9 @@ const WEB = process.env.MIZEL_LIVE_WEB || path.join(HERE, 'web');
 const DATA = process.env.MIZEL_LIVE_DATA || path.join(HOME, '.hermes/data/apps/mizel-live');
 const UP = { host: '127.0.0.1', port: Number(process.env.MEETINGS_PORT || 8973), base: '/meetings' };
 const WIZARD_API = process.env.WIZARD_API_URL || 'http://127.0.0.1:8865';
+// Set to the SAME service prefix used by the orb (including /wizard/hermes).
+// Public queue run IDs must not be sent to a different raw runtime.
+const ORB_API = process.env.WIZARD_ORB_API_URL || WIZARD_API;
 const PUBLIC_ORIGINS = new Set([...(process.env.MIZEL_ALLOWED_ORIGINS || '').split(',').filter(Boolean), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
 const REALTIME_MODEL = process.env.MIZEL_LIVE_REALTIME_MODEL || 'voxtral-mini-4b-realtime';
 const SUMMARY_MODEL = process.env.MIZEL_LIVE_SUMMARY_MODEL || 'deepseek-v4-1-flash';
@@ -35,7 +38,10 @@ const FOLLOW_IDLE_CLOSE_MS = 45 * 60 * 1000;
 const STATE_PATH = path.join(DATA, 'state.json');
 const LOG_PATH = path.join(DATA, 'events.jsonl');
 const orbEvents = new OrbEvents(path.join(DATA, 'orb-events.json'));
-setInterval(() => void orbEvents.refresh(id => wizard(`/v1/runs/${encodeURIComponent(id)}`)), 5000).unref();
+async function orbRead(route,row){const query=row.agent?`${route.includes('?')?'&':'?'}agent=${encodeURIComponent(row.agent)}`:'';
+  const r=await fetch(ORB_API+route+query,{headers:{Authorization:`Bearer ${secrets.API_SERVER_KEY}`},signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Existing orb read unavailable');return r.json();}
+async function orbMessages(row){const rows=[];for(let offset=0;offset<2000;offset+=200){const page=await orbRead(`/api/sessions/${encodeURIComponent(row.threadId)}/messages?limit=200&offset=${offset}&order=latest`,row);rows.push(...(page.data||page.messages||[]));if(!page.has_more)return rows;}return [];}
+setInterval(() => void orbEvents.refresh((id,row)=>orbRead(`/v1/runs/${encodeURIComponent(id)}`,row),orbMessages), 5000).unref();
 
 function readEnvFile(file, keys) {
   const out = {};
@@ -474,11 +480,21 @@ const server = http.createServer(async (req, res) => {
     try {
       const chunks=[];let bytes=0;
       for await(const c of req){bytes+=c.length;if(bytes>100000)return sendRaw(res,413,'too large');chunks.push(c);}
-      const event=orbEvents.upsert(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if(!validMeetingId(value.meetingId)||(await backendMeeting(value.meetingId))?.id!==value.meetingId)throw Error('Existing meeting could not be verified');
+      const event=orbEvents.upsert(value);
       return sendRaw(res,200,JSON.stringify({event}),'application/json');
     }catch(e){return sendRaw(res,409,JSON.stringify({error:e.message}),'application/json');}
   }
   const exportMatch=/^\/api\/meetings\/([A-Za-z0-9_-]+)\/export.md$/.exec(p);
+  const deleteMatch=/^\/api\/meetings\/([A-Za-z0-9_-]+)$/.exec(p);
+  if(deleteMatch && req.method==='DELETE'){
+    if(!req.headers.origin||!PUBLIC_ORIGINS.has(req.headers.origin))return sendRaw(res,403,'forbidden');
+    try{const upstream=await fetch(`http://${UP.host}:${UP.port}${UP.base}${p}`,{method:'DELETE'});
+      if(upstream.ok||upstream.status===404){orbEvents.save(Object.fromEntries(Object.entries(orbEvents.rows).filter(([,row])=>row.meetingId!==deleteMatch[1])));return sendRaw(res,200,JSON.stringify({ok:true}),'application/json');}
+      return sendRaw(res,upstream.status,await upstream.text(),'application/json');
+    }catch{return sendRaw(res,502,'Meeting deletion could not be confirmed');}
+  }
   if(exportMatch && req.method==='GET') {
     try {const upstream=await fetch(`http://${UP.host}:${UP.port}${UP.base}${p}`);
       return sendRaw(res,upstream.status,(await upstream.text())+(upstream.ok?discussionMarkdown(orbEvents.list(exportMatch[1])):''),'text/markdown; charset=utf-8');

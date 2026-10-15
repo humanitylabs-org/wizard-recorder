@@ -821,10 +821,10 @@ setInterval(loadDiscussions,3000);
 function discussionCard(e) {
   const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
   return h('section',{class:'qa orb-event',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)}},
-    h('header',{},h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),h('strong',{text:label})),
+    h('header',{},h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),' ',h('strong',{text:label})),
     h('p',{text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Question pending transcription')}),
     h('small',{text:'Assistant material · not meeting speech or an agreed decision'}),
-    e.threadId&&h('a',{href:threadHref(e.threadId),target:'_top',text:'Continue in Wizard'}),
+    e.threadId&&h('p',{},h('a',{class:'w-btn w-btn-sm',href:threadHref(e.threadId),target:'_top',text:'Continue in Wizard'})),
     e.answer&&h('details',{},h('summary',{text:'Assistant answer'}),h('p',{text:e.answer})),
     e.error&&h('p',{text:e.error}));
 }
@@ -914,12 +914,18 @@ function groupSegments(segs) {
   return out;
 }
 const SPEAKER = { me: 'Me', them: 'Them', mixed: 'Room' };
+function transcriptTimeline(segs,events){
+  const timeline=[],ordered=[...events].sort((a,b)=>a.atMediaMs-b.atMediaMs||a.id.localeCompare(b.id));let pending=[],at=0;
+  const flush=()=>{timeline.push(...groupSegments(pending));pending=[];};
+  for(const segment of segs){while(at<ordered.length&&ordered[at].atMediaMs<=(segment.start_ms||0)){flush();timeline.push({start:ordered[at].atMediaMs,event:ordered[at++]});}pending.push(segment);}
+  flush();while(at<ordered.length)timeline.push({start:ordered[at].atMediaMs,event:ordered[at++]});return timeline;
+}
 function renderSegments(container, { scrollEnd = false } = {}) {
   if (!container) return;
   const m = state.current; const segs = m?.segments || [];
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
   const events=linkedDiscussions.get(m?.id)||[];
-  const timeline=[...segs.map(s=>({start:s.start_ms||0,end:s.end_ms,source:s.source||'mixed',items:[s]})),...events.map(event=>({start:event.atMediaMs,event}))].sort((a,b)=>a.start-b.start||(a.event?-1:1));
+  const timeline=transcriptTimeline(segs,events);
   const kids = timeline.map((g) => g.event?discussionCard(g.event):h('div', { class: `tx ${g.source}` },
     h('div', { class: 'who' }, player.ok && player.id === m?.id
       ? h('button', { class: 'tx-at', type: 'button', title: 'Play from here', text: fmtClock(g.start), onclick: () => player.seek(g.start, true) })
@@ -1087,7 +1093,7 @@ class SharedMeeting {
     }}
     const markers=this.result?.meta?.handoffs||[];
     if(markers.length){const response=await fetch(`orb-events?meetingId=${enc(this.meetingId)}`,{cache:'no-store'});const saved=await response.json();
-      if(!response.ok||markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs)))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
+      if(!response.ok||markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs&&(!m.voiceTakeId||e.voiceTakeId===m.voiceTakeId)&&(!m.endedAt||e.endedAt===m.endedAt))))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
     }
     await WizardApp.capture.ack(this.captureId);this.detach();
     try {const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');if(hint?.id===this.captureId)sessionStorage.removeItem('mizel.sharedCapture');}catch{} }

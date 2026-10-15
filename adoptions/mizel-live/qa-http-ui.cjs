@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const dir=process.env.UI_EVIDENCE;if(!dir?.startsWith('/Volumes/ThalesMedia/')||!os.hostname().startsWith('thales'))throw Error('Thales external QA required');fs.mkdirSync(dir,{recursive:true});
 const checks=[],requests=[],errors=[];let child,browser,answerReady=false;
-const meeting={id:'synthetic-ui',title:'Synthetic meeting',status:'done',started_at:'2026-01-01T00:00:00Z',duration_ms:10000,notes:'',notes_rev:0,chunks:[],segments:[{id:'seg-a',start_ms:0,end_ms:1000,text:'Synthetic A',source:'me'},{id:'seg-c',start_ms:2000,end_ms:3000,text:'Synthetic C',source:'me'}],enhanced:{markdown:'# Frozen meeting summary\n\nOnly meeting speech.',created_at:'2026-01-01T00:00:00Z'},jobs:{}};
+const meeting={id:'synthetic-ui',source:'meetings',title:'Synthetic meeting',status:'done',started_at:'2026-01-01T00:00:00Z',duration_ms:10000,notes:'',notes_rev:0,chunks:[],segments:[{id:'seg-a',start_ms:0,end_ms:1000,text:'Synthetic A',source:'me'},{id:'seg-c',start_ms:2000,end_ms:3000,text:'Synthetic C',source:'me'}],enhanced:{markdown:'# Frozen meeting summary\n\nOnly meeting speech.',created_at:'2026-01-01T00:00:00Z'},jobs:{}};
 const fixture=http.createServer((req,res)=>{requests.push({method:req.method,path:req.url});res.setHeader('Content-Type','application/json');
  if(req.url.includes('/v1/runs/run-synthetic'))return res.end(JSON.stringify({run_id:'run-synthetic',session_id:'thread-synthetic',status:answerReady?'completed':'running',output:answerReady?'Synthetic later answer, not an agreed decision':''}));
  if(req.url.includes('/messages'))return res.end(JSON.stringify({data:[{id:42,role:'user',content:'Synthetic question\n\n[WIZARD_FILES_V1]\n[{"id":"file-synthetic"}]\n[/WIZARD_FILES_V1]'}],has_more:false}));
@@ -35,9 +35,11 @@ async function rows(){return (await (await fetch(base+'/orb-events?meetingId='+m
    await p.locator('#segments [data-orb-event="orb-synthetic-ui"]').first().waitFor({timeout:8000});
    assert.ok((await p.locator('body').innerText()).includes('Synthetic question'));
    const link=p.locator('#segments [data-orb-event] a').first();assert.equal(await link.getAttribute('href'),'/wizard/?session=thread-synthetic');
-   const dom=await p.locator('#segments').textContent().catch(()=>p.locator('#segments [data-orb-event]').first().textContent());assert.ok(dom.includes('Synthetic question'));
+   const dom=await p.locator('#segments').textContent();assert.ok(dom.indexOf('Synthetic A')<dom.indexOf('Synthetic question'));assert.ok(dom.indexOf('Synthetic question')<dom.indexOf('Synthetic C'));
    await p.locator('#segments [data-orb-event] summary').first().click();assert.ok((await p.locator('body').innerText()).includes('Synthetic later answer'));
    await p.screenshot({path:path.join(dir,'transcript.png')});
  });
+ await test('summary keeps its original text and shows the same linked later answer',async()=>{await p.getByRole('tab',{name:'Summary',exact:true}).click();const summary=p.locator('#enhanced');assert.match(await summary.innerText(),/Frozen meeting summary/i);assert.match(await summary.innerText(),/Archimedes discussions/);await summary.locator('[data-orb-event] summary').click();assert.match(await summary.innerText(),/Synthetic later answer/);await p.screenshot({path:path.join(dir,'summary.png')});});
+ await test('deleting meeting removes only its event projection, never its Wizard thread',async()=>{assert.equal((await fetch(base+'/api/meetings/synthetic-ui',{method:'DELETE',headers:{Origin:base}})).status,200);assert.deepEqual(await rows(),[]);assert.equal(requests.filter(r=>r.method==='DELETE').length,1);assert.ok(requests.filter(r=>r.method==='DELETE')[0].path.endsWith('/api/meetings/synthetic-ui'));});
  assert.deepEqual(errors,[]);fs.writeFileSync(path.join(dir,'receipt.json'),JSON.stringify({checks,errors,requests,synthetic:true,sourceSHA:process.env.SOURCE_SHA},null,2));
 })().catch(e=>{console.error(e);fs.writeFileSync(path.join(dir,'failure.json'),JSON.stringify({error:e.stack,checks,errors},null,2));process.exitCode=1;}).finally(async()=>{await browser?.close();await stop();fixture.close();});

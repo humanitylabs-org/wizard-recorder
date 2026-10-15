@@ -481,7 +481,9 @@ const server = http.createServer(async (req, res) => {
       const chunks=[];let bytes=0;
       for await(const c of req){bytes+=c.length;if(bytes>100000)return sendRaw(res,413,'too large');chunks.push(c);}
       const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if(!validMeetingId(value.meetingId)||(await backendMeeting(value.meetingId))?.id!==value.meetingId)throw Error('Existing meeting could not be verified');
+      if(typeof value?.meetingId!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(value.meetingId))throw Error('Invalid meeting id');
+      const verified=await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(value.meetingId)}`,{signal:AbortSignal.timeout(10000)});
+      if(!verified.ok||(await verified.json())?.id!==value.meetingId)throw Error('Existing meeting could not be verified');
       const event=orbEvents.upsert(value);
       return sendRaw(res,200,JSON.stringify({event}),'application/json');
     }catch(e){return sendRaw(res,409,JSON.stringify({error:e.message}),'application/json');}

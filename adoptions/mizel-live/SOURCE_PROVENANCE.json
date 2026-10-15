@@ -1,0 +1,20 @@
+{
+  "source_revision": "215eee587cae70e3c105773698b29c42cdcf8a5b",
+  "source_dirty": true,
+  "policy": "Explicit full runnable server + web projection of live dirty shared-capture adoption. QA artifacts excluded. No source/live files edited. Portable root web is NOT substituted for this UI. Owner configuration comes from environment.",
+  "baseline_sha256": {
+    "server.mjs": "6e343e97d9196ca7059dc6bb0ea8cf2e1146fdb91320ad87a468c2de4726a15f",
+    "web/app.js": "5cfe84d8ffa8259e89dd11ce239989908d0b14ae262477aaa65704735f135740",
+    "web/apple-touch-icon.png": "93fe4e7c6bd653a4217520ac4bbe003d9939eabe52ff8b334f864f4f4bcc507c",
+    "web/icon-192.png": "a1a0347984fbfcec379c69a7da9322593ef564682025b98ffaa921bf875c145d",
+    "web/icon-512.png": "107841329c3598260c473b97e6cc55641e646127aa4de05c2d21c9ae0e313f35",
+    "web/icon.svg": "4356864d68d7dfe09d3835db307ff8d69541b80fc425c75217a309eff57ed317",
+    "web/index.html": "b6af3d4a2fb3a81918fb9fd574c337e28de1baba8c3caf5a867b565b86f399e5",
+    "web/manifest.webmanifest": "e56e84aca517f85265093487fd67bd89fe7a6fa9a3996e04c4e94f199c7487ad",
+    "web/styles.css": "185d103024f67694407f4dba6d72f5415d6da4de3122dc22c53ee19c6e34e694",
+    "web/wizard-appearance.css": "219249b7746d63b92afaebbd1241e9efc71bd0f4ce984d4b56dbf4a7651f7c5e",
+    "web/wizard-appearance.js": "693db3495340fb598beb8eef233685aa7457eae2049ff0d6315f15a39c02e836",
+    "web/wizard-style.css": "c94915a7385e681eb2ce9b3806bc65ea340383a86fc405ba28ee33f5900f3ea3"
+  },
+  "provider_source": "mizel-android-mvp/tinfoil-bridge/src/provider.js; tinfoil 1.2.1; copied unchanged"
+}

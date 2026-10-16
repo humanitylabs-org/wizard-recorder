@@ -556,11 +556,51 @@ function toggleMenu(m) {
   setTimeout(() => document.addEventListener('click', closeMenu, { once: true }));
 }
 function closeMenu() { const open = els.docActions && $('.w-menu', els.docActions); if (open) open.remove(); return !!open; }
+const deletingMeetings = new Set();
+function deletionBlocked(m) {
+  const r = state.rec?.meetingId === m.id ? state.rec : null;
+  const current = WizardApp.capture.current();
+  if (current?.meta?.meetingId === m.id && current.id !== r?.engine?.captureId) return true;
+  if (r) return r.phase !== 'error' || !!(r.engine?.captureId && (r.engine.meetingId !== m.id || !r.engine.canDiscardStopped()));
+  return current?.meta?.meetingId === m.id;
+}
+async function finishDeletedRecording(r) {
+  try {
+    await r.engine?.discardDeleted(r.meetingId);
+    if (state.rec === r) endRecSession();
+    return true;
+  } catch (e) {
+    if (state.rec === r) {
+      r.phase = 'error'; r.error = `Meeting deleted, but local audio cleanup failed: ${errMsg(e)}`;
+      renderRecBanner(); renderPill();
+    }
+    toast(`Meeting deleted, but local audio is still retained: ${errMsg(e)}`, { error: true, action: { label: 'Retry cleanup', fn: () => retryRecording() } });
+    return false;
+  }
+}
 function deleteMeeting(m) {
-  if (isLiveHere(m)) { toast('Stop the recording before deleting.', { error: true }); return; }
-  confirmToast(`Delete “${m.title || 'Untitled meeting'}” with its notes, transcript and audio?`, 'Delete', async () => {
-    try { await API.remove(m.id); state.meetings = state.meetings.filter((x) => x.id !== m.id); localStorage.removeItem(draftKey(m.id)); toast('Meeting deleted'); if (state.current?.id === m.id) navigate(null); else renderList(); }
-    catch (e) { toast(`Couldn't delete: ${errMsg(e)}`, { error: true }); }
+  if (deletingMeetings.has(m.id) || deletionBlocked(m)) { toast('Stop the recording and wait for saving before deleting.', { error: true }); return; }
+  confirmToast(`Delete “${m.title || 'Untitled meeting'}” with its notes, transcript and audio, including any retained local recording?`, 'Delete', async () => {
+    // Recheck after confirmation: a retry/start may have changed the capture owner.
+    if (deletingMeetings.has(m.id) || deletionBlocked(m)) { toast('Stop the recording and wait for saving before deleting.', { error: true }); return; }
+    const r = state.rec?.meetingId === m.id ? state.rec : null;
+    deletingMeetings.add(m.id);
+    if (r) r.phase = 'deleting'; // Exclude concurrent save/retry until DELETE settles.
+    try {
+      await API.remove(m.id);
+      if (r) {
+        r.deletionConfirmed = true;
+        // Keep cleanup-only intent through a frame reload if local ACK must be retried.
+        if (r.engine?.captureId) try { const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null'); if(!hint || (hint.id===r.engine.captureId && hint.meetingId===r.meetingId))sessionStorage.setItem('mizel.sharedCapture', JSON.stringify({ id:r.engine.captureId, meetingId:r.meetingId, deletionConfirmed:true })); } catch {}
+      }
+      const cleaned = !r || await finishDeletedRecording(r);
+      state.meetings = state.meetings.filter((x) => x.id !== m.id); localStorage.removeItem(draftKey(m.id));
+      if (cleaned) toast('Meeting deleted');
+      if (state.current?.id === m.id) navigate(null); else renderList();
+    } catch (e) {
+      if (r && state.rec === r) r.phase = 'error';
+      toast(`Couldn't delete: ${errMsg(e)}`, { error: true });
+    } finally { deletingMeetings.delete(m.id); }
   });
 }
 async function copyMarkdown(m) {
@@ -1093,6 +1133,23 @@ class SharedMeeting {
   async stop() { if(!this.result)this.result=await this.session.stop();for(const item of this.result.streamChunks||[])this.acceptChunk(item);return this.result; }
   async abort() { discardWarm(this.warm); if(this.session && !this.result)await this.session.cancel();this.detach(); }
   detach() { for(const off of this.offs.splice(0))off(); }
+  canDiscardStopped() {
+    if (!this.captureId || (this.result && (this.result.id !== this.captureId || (this.result.meta?.meetingId && this.result.meta.meetingId !== this.meetingId)))) return false;
+    const info = this.session?.getInfo();
+    if (info) return info.inputStopped === true;
+    return !!this.result && this.result.id === this.captureId && WizardApp.capture.current()?.id !== this.captureId;
+  }
+  async discardDeleted(meetingId) {
+    // Only the explicit, successful domain DELETE permits this custody release.
+    // cancel() rejects once Stop begins; ack() removes only this app's pending Result.
+    // Ordinary saves still use acknowledge() and its PCM/marker readback gates below.
+    if (meetingId !== this.meetingId || !this.canDiscardStopped()) throw new Error('Stop the original capture before deleting its local audio.');
+    this.uploader.abandon(); this.detach();
+    if (!this.result) this.result = await this.session.stop(); // Finish storage after input already stopped, without uploading.
+    if (this.result.id !== this.captureId || (this.result.meta?.meetingId && this.result.meta.meetingId !== meetingId)) throw new Error('Retained capture identity changed.');
+    await WizardApp.capture.ack(this.captureId);
+    try { const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null'); if(hint?.id===this.captureId && hint.meetingId===meetingId)sessionStorage.removeItem('mizel.sharedCapture'); } catch {}
+  }
   async acknowledge() {
     // Native uploads and Stop may still be finishing after microphone Stop resolves. Read the own
     // domain record until durable completion; never expire recording/save holds or restart a take.
@@ -1151,7 +1208,7 @@ function showParticipantsHint() {
   setTimeout(() => { el.classList.add('is-leaving'); setTimeout(() => el.remove(), 400); }, PARTICIPANTS_HINT_MS);
 }
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
-  const m = state.current; if (!m) return;
+  const m = state.current; if (!m || deletingMeetings.has(m.id)) return;
   if (state.rec && state.rec.phase !== 'error') return;
   if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
   if (state.rec) endRecSession();
@@ -1225,6 +1282,7 @@ function onNativeState(s, eng) {
 async function retryRecording() {
   const r=state.rec, engine=r?.engine;
   if(r?.phase!=='error')return;
+  if(r.deletionConfirmed) { r.phase='deleting'; return finishDeletedRecording(r); }
   if(engine?.result)return stopRecording();
   if(!engine?.captureId)return beginRecording({});
   r.phase='starting';r.error=null;engine.detach();renderPill();
@@ -1255,7 +1313,12 @@ async function reattachShared() {
       if(engine.info.phase==='error'||engine.info.inputStopped){state.rec.phase='error';await stopRecording();return;}
       live.start(id,'',{follow:engine.native&&!engine.livePcm});
     } else {
-      engine.result=take;engine.captureId=take.id;for(const c of take.streamChunks||[])engine.acceptChunk(c);
+      engine.result=take;engine.captureId=take.id;
+      let hint;try{hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');}catch{}
+      if(hint?.deletionConfirmed===true && hint.id===take.id && hint.meetingId===id) {
+        state.rec.deletionConfirmed=true;state.rec.phase='deleting';await finishDeletedRecording(state.rec);return;
+      }
+      for(const c of take.streamChunks||[])engine.acceptChunk(c);
       state.rec.phase='uploading';renderPill();await engine.uploader.drain();
       if(!take.meta?.native?.backendStopOwned)await API.stop(id,{final_seq:engine.finalSeq,reason:take.partial?'process_death':'user'});
       await engine.acknowledge();endRecSession();void reattachShared();
@@ -1280,6 +1343,7 @@ function recordingSaveFailed(r, e) {
 }
 async function stopRecording({ reason = 'user' } = {}) {
   const r = state.rec; if (!r?.engine || !['recording','error'].includes(r.phase)) return;
+  if (r.deletionConfirmed) return retryRecording();
   const id = r.meetingId; const engine = r.engine;
   clearTimeout(r.pauseTimer);
   r.phase = 'stopping'; r.error = null; r.saveStage = 'stop capture'; renderPill(); renderAskBar();

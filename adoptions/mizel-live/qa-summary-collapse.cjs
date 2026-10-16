@@ -15,6 +15,7 @@ const server=createServer((req,res)=>{const p=new URL(req.url,'http://localhost'
  if(p.endsWith('app-capture.js'))return res.end('');
  if(p==='/summary')return json({summary:{topics}});
  if(p==='/orb-events')return json({events:[]});
+ if(p==='/asks')return json({asks:[]});
  if(p.startsWith('/api/')){if(p==='/api/meetings')return json({meetings:[meeting]});if(p==='/api/meetings/qa-summary')return json(meeting);return json({meetings:[],events:[],asks:[],segments:[],pending:0})}
  const name=p==='/'?'index.html':p.slice(1);if(name.includes('..')){res.statusCode=400;return res.end()}
  try{let b=fs.readFileSync(path.join(root,name));if(name==='app.js')b=Buffer.from(b.toString()+instrument);res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.svg')?'image/svg+xml':'text/html');res.end(b)}catch{res.statusCode=404;res.end()}

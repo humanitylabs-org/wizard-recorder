@@ -608,13 +608,8 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 .sum-at { min-height: 32px; }
 .tx-at { padding: 0; border: 0; background: none; color: var(--w-wiz); font: inherit; font-size: inherit; cursor: pointer; font-variant-numeric: tabular-nums; }
 
-/* "Say who's here" nudge at the start of a new recording: top of the meeting, never blocks a tap. */
-.who-hint {
-  position: fixed; z-index: 90; left: 50%; top: calc(64px + var(--w-safe-top, env(safe-area-inset-top, 0px)));
-  transform: translateX(-50%); width: min(520px, calc(100% - 32px)); pointer-events: none;
-  padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.4;
-  background: #1c1f2b; color: #e6e8f0; border-left: 3px solid #3fe0ff; box-shadow: 0 0 0 1px var(--w-line, rgba(255,255,255,.08)), 0 8px 24px rgba(0,0,0,.35);
-  animation: who-hint-in .25s ease-out both; transition: opacity .35s ease, transform .35s ease;
-}
-.who-hint.is-leaving { opacity: 0; transform: translateX(-50%) translateY(-6px); }
-@keyframes who-hint-in { from { opacity: 0; transform: translateX(-50%) translateY(-6px); } to { opacity: 1; transform: translateX(-50%); } }
+/* Hint/notice lane adapted from preview 56cefaa web/recorder.css; no preview recorder code. */
+.toasts { top: auto; left: auto; right: 12px; transform: none; bottom: calc(88px + var(--w-safe-bottom)); width: min(340px, calc(100% - 24px)); align-items: flex-end; }
+.toasts > .w-toast { width: 100%; }
+.who-hint { position: absolute; z-index: 90; right: 12px; bottom: calc(88px + var(--w-safe-bottom)); width: min(340px, calc(100% - 24px)); transform: none; pointer-events: none; padding: 10px 14px; border-radius: 14px; font-size: 13.5px; line-height: 1.4; background: var(--w-bg-raised); color: var(--w-text); box-shadow: var(--w-shadow-float), inset 3px 0 0 var(--w-wiz); transition: opacity .35s ease, transform .35s ease; }
+.who-hint.is-leaving { opacity: 0; transform: translateY(6px); }

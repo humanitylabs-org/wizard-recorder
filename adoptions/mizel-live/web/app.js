@@ -96,7 +96,7 @@ function toast(msg, { error = false, action = null, timeout = error ? 8000 : 350
 }
 // In-app confirmation (window.confirm is unreliable inside bare WKWebViews).
 const confirmToast = (msg, label, fn) => toast(msg, { error: true, timeout: 12000, action: { label, fn, primary: true } });
-const errMsg = (e) => (e instanceof ApiError ? e.message : (!navigator.onLine ? 'You are offline' : (e?.message || 'Something went wrong')));
+const errMsg = (e) => e?.message || 'Something went wrong';
 
 // ───────────────────────── 2. API client ─────────────────────────
 class ApiError extends Error {
@@ -105,18 +105,26 @@ class ApiError extends Error {
     this.status = status; this.data = data;
   }
 }
-async function api(path, { method = 'GET', json, body, headers = {} } = {}) {
-  const opts = { method, headers: { Accept: 'application/json', ...headers }, credentials: 'same-origin' };
+// Browser connectivity flags are hints, never proof a request or local save failed.
+async function transport(path, opts = {}) {
+  try { return await fetch(path, opts); }
+  catch (cause) {
+    throw Object.assign(new Error('Could not reach the meeting service. Check the connection and retry.', { cause }), { code: 'transport_unavailable' });
+  }
+}
+async function api(path, { method = 'GET', json, body, headers = {}, cache = 'no-store' } = {}) {
+  const opts = { method, headers: { Accept: 'application/json', ...headers }, credentials: 'same-origin', cache };
   if (json !== undefined) { opts.body = JSON.stringify(json); opts.headers['Content-Type'] = 'application/json'; }
   else if (body !== undefined) opts.body = body;
-  const res = await fetch(path, opts);
+  const res = await transport(path, opts);
   if (!res.ok) {
     let data = null;
     try { data = await res.json(); } catch { /* non-JSON error body */ }
     throw new ApiError(res.status, data);
   }
   if (res.status === 204) return null;
-  return res.json();
+  try { return await res.json(); }
+  catch (cause) { throw Object.assign(new Error(`Meeting service returned an unreadable response (${res.status}).`, { cause }), { status: res.status, code: 'invalid_response' }); }
 }
 const API = {
   meetings: (q = '', limit = 200) => api(`api/meetings?${new URLSearchParams({ q, limit: String(limit) })}`),
@@ -349,9 +357,9 @@ function renderRow(m) {
 }
 function renderRecBanner() {
   const r = state.rec;
-  const show = r && r.phase !== 'error' && !(state.route.view === 'meeting' && state.route.id === r.meetingId);
+  const show = r && !(state.route.view === 'meeting' && state.route.id === r.meetingId);
   els.recBanner.hidden = !show;
-  if (show) replace(els.recBanner, h('span', { class: 'w-live-dot' }), h('span', { class: 't', text: r.title || 'Untitled meeting' }), h('span', { class: 'clock', text: fmtClock(recElapsed()) }));
+  if (show) replace(els.recBanner, h('span', { class: 'w-live-dot' }), h('span', { class: 't', text: r.phase === 'error' ? 'Audio retained · Open to retry save' : r.title || 'Untitled meeting' }), h('span', { class: 'clock', text: fmtClock(recElapsed()) }));
 }
 
 function renderHome() {
@@ -411,7 +419,7 @@ async function startFromEvent(ev) {
 let creating = false;
 async function newMeeting() {
   if (creating) return;
-  if (state.rec && state.rec.phase !== 'error') { navigate(state.rec.meetingId); toast('Already recording. Stop this one first.'); return; }
+  if (state.rec) { navigate(state.rec.meetingId); toast(state.rec.phase === 'error' ? 'Retry saving the retained recording first.' : 'Already recording. Stop this one first.'); return; }
   let warm;try{warm=prewarmCapture();}catch(e){toast(errMsg(e),{error:true});return;}
   creating = true; els.btnNew.disabled = true; els.btnNewMobile.disabled = true;
   try {
@@ -450,6 +458,7 @@ async function loadMeeting(id) {
 function setCurrent(m, { fresh = false } = {}) {
   const prev = state.current;
   state.current = m;
+  if (m.status !== 'recording') state.segPending = 0;
   const enhancedAt = m.enhanced?.created_at || null;
   if (fresh) {
     state.notes.rev = m.notes_rev || 0;
@@ -477,7 +486,7 @@ function setCurrent(m, { fresh = false } = {}) {
   renderList();
 }
 const isImported = (m) => !!m && m.source !== 'meetings';
-const isLiveHere = (m) => !!m && !!state.rec && state.rec.meetingId === m.id && state.rec.phase !== 'error';
+const isLiveHere = (m) => !!m && !!state.rec && state.rec.meetingId === m.id && ['starting','recording'].includes(state.rec.phase);
 
 function renderDoc() {
   const m = state.current;
@@ -579,8 +588,8 @@ function renderStatus(m) {
   const r = state.rec?.meetingId === m.id ? state.rec : null;
   if (r?.phase === 'error') {
     kids.push(h('div', { class: 'w-notice is-danger' }, h('span', { class: 'msg', text: r.error || 'Recording failed to start.' }),
-      h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Try again', onclick: retryRecording }),
-      h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'End meeting', onclick: () => finishWithoutAudio(m) })));
+      h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: r.engine?.result ? 'Retry save' : 'Try again', onclick: retryRecording }),
+      m.status === 'recording' && !r.engine?.result && h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'End meeting', onclick: () => finishWithoutAudio(m) })));
   } else if (m.status === 'recording' && !r && justStoppedHere(m)) {
     kids.push(h('div', { class: 'w-notice is-accent' }, h('span', { class: 'w-spinner' }), h('span', { class: 'msg', text: 'Saving the last of the recording…' })));
   } else if (m.status === 'recording' && !r && pendingAutostart?.id !== m.id) {
@@ -593,7 +602,6 @@ function renderStatus(m) {
     kids.push(h('div', { class: 'w-notice is-accent' }, h('span', { class: 'w-spinner' }),
       h('span', { class: 'msg', text: n ? `Transcribing the last ${pluralize(n, 'chunk')}… notes will enhance automatically.` : 'Finishing the transcript…' })));
   }
-  if (!navigator.onLine) kids.push(h('div', { class: 'w-notice is-warn' }, h('span', { class: 'msg', text: 'You’re offline. Notes stay on this device and save when you reconnect.' })));
   // Invitation to enhance (Granola's signature moment) when nothing has been enhanced yet.
   replace(els.docStatus, ...kids);
 }
@@ -937,7 +945,7 @@ function renderSegments(container, { scrollEnd = false } = {}) {
   replace(container, ...kids);
   if (container === els.segments) {
     els.drawerCount.textContent = segs.length ? fmtClock(segs[segs.length - 1].end_ms || 0) : '';
-    const pending = m?.jobs?.transcribe_pending || state.segPending || 0;
+    const pending = active ? (m?.jobs?.transcribe_pending ?? (m?.status === 'recording' ? state.segPending : 0)) : 0;
     replace(els.drawerPending, isLiveHere(m) ? [h('span', { class: 'w-live-dot' }), 'Live'] : pending ? [h('span', { class: 'w-spinner', style: 'width:11px;height:11px' }), 'Finishing…'] : '');
     if (scrollEnd || atBottom) container.scrollTop = container.scrollHeight;
   }
@@ -1092,8 +1100,8 @@ class SharedMeeting {
       if(e.code!=='native_upload_pending')throw e;this.cbs.onQueue();await new Promise(resolve=>setTimeout(resolve,1500));
     }}
     const markers=this.result?.meta?.handoffs||[];
-    if(markers.length){const response=await fetch(`orb-events?meetingId=${enc(this.meetingId)}`,{cache:'no-store'});const saved=await response.json();
-      if(!response.ok||markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs&&(!m.voiceTakeId||e.voiceTakeId===m.voiceTakeId)&&(!m.endedAt||e.endedAt===m.endedAt))))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
+    if(markers.length){const saved=await api(`orb-events?meetingId=${enc(this.meetingId)}`);
+      if(markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs&&(!m.voiceTakeId||e.voiceTakeId===m.voiceTakeId)&&(!m.endedAt||e.endedAt===m.endedAt))))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
     }
     await WizardApp.capture.ack(this.captureId);this.detach();
     try {const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');if(hint?.id===this.captureId)sessionStorage.removeItem('mizel.sharedCapture');}catch{} }
@@ -1112,6 +1120,8 @@ async function verifyCaptureReadback(meetingId, take, finalSeq) {
   if(!take)throw new Error('No durable shared capture Result.');
   const saved=await API.meeting(meetingId);
   if(saved.id!==meetingId)throw new Error('Backend returned a different meeting; audio retained.');
+  // Project canonical completion independently of local capture cleanup. This is NOT an ack.
+  if(state.current?.id===meetingId && saved.status!=='recording') { setCurrent(saved); renderDoc(); schedulePoll(); }
   if(saved.status==='recording')throw Object.assign(new Error('Backend stop has not been durably read back; audio retained.'),{code:take.meta?.native?.backendOwned?'native_upload_pending':'backend_stop_unconfirmed'});
   for(const [source,last] of Object.entries(finalSeq))if(Number((saved.audio?.tracks||[]).find(t=>t.source===source)?.chunks||0) < last+1)throw new Error('Backend is missing promised audio; shared capture retained.');
   if(take.meta?.native?.backendOwned) {
@@ -1122,8 +1132,8 @@ async function verifyCaptureReadback(meetingId, take, finalSeq) {
   const first=Math.round(Math.min(...items.map(c=>c.startMs))*16),end=Math.round(Math.max(...items.map(c=>c.startMs+c.durationMs))*16);
   const expected=new Int32Array(end-first);
   for(const c of items) {const samples=pcmData(await c.blob.arrayBuffer()),at=Math.round(c.startMs*16)-first;for(let i=0;i<samples.length;i++)expected[at+i]+=samples[i];}
-  const response=await fetch(API.audioUrl(meetingId)+`?capture_readback=${enc(take.id)}`,{credentials:'same-origin',cache:'no-store'});
-  if(!response.ok)throw new Error('Backend audio readback failed; shared capture retained.');
+  const response=await transport(API.audioUrl(meetingId)+`?capture_readback=${enc(take.id)}`,{credentials:'same-origin',cache:'no-store'});
+  if(!response.ok)throw new ApiError(response.status,{error:`Backend audio readback failed (${response.status}); shared capture retained.`});
   const actual=pcmData(await response.arrayBuffer());if(actual.length<end)throw new Error('Backend PCM is incomplete; audio retained.');
   for(let i=0;i<expected.length;i++)if(actual[first+i]!==Math.max(-32768,Math.min(32767,expected[i])))throw new Error('Backend PCM differs from shared capture; audio retained.');
 }
@@ -1136,13 +1146,14 @@ const PARTICIPANTS_HINT = 'In a meeting? Start by saying who\u2019s here, like \
 const PARTICIPANTS_HINT_MS = 5000;
 function showParticipantsHint() {
   document.querySelector('.who-hint')?.remove();
-  const el = h('div', { class: 'who-hint', role: 'status', 'aria-live': 'polite', text: PARTICIPANTS_HINT });
-  document.body.append(el);
+  const el = h('div', { class: 'w-toast is-hint who-hint', role: 'status', 'aria-live': 'polite' }, h('span', { class: 'msg', text: PARTICIPANTS_HINT }));
+  els.pill.parentElement.append(el);
   setTimeout(() => { el.classList.add('is-leaving'); setTimeout(() => el.remove(), 400); }, PARTICIPANTS_HINT_MS);
 }
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
   const m = state.current; if (!m) return;
   if (state.rec && state.rec.phase !== 'error') return;
+  if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
   if (state.rec) endRecSession();
   const cbs = {
     onLevel: (lvl) => updateLevel(lvl),
@@ -1250,7 +1261,7 @@ async function reattachShared() {
       await engine.acknowledge();endRecSession();void reattachShared();
     }
     renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();
-  }catch(e){if(state.rec){state.rec.phase='error';state.rec.error=errMsg(e);renderPill();renderRecBanner();if(state.current?.id===state.rec.meetingId)renderDoc();}toast('Capture retained: '+errMsg(e),{error:true,action:{label:'Retry save',fn:retryRecording}});}
+  }catch(e){if(state.rec)recordingSaveFailed(state.rec,e);}
 }
 
 async function toggleSystemAudio() {
@@ -1259,21 +1270,31 @@ async function toggleSystemAudio() {
   catch (e) { if (e?.name !== 'NotAllowedError') toast(`Computer audio: ${e.message || e.name}`, { error: true }); }
   renderPill();
 }
+function recordingSaveFailed(r, e) {
+  if (state.rec !== r) return;
+  r.phase='error';
+  r.saveFailure={stage:r.saveStage || 'recover capture',status:e.status || null,code:e.code || 'save_verification',message:errMsg(e)};
+  r.error=`Audio retained — ${r.saveFailure.stage}: ${errMsg(e)}`;
+  renderPill(); renderRecBanner();
+  if(state.current?.id===r.meetingId)renderDoc();
+}
 async function stopRecording({ reason = 'user' } = {}) {
   const r = state.rec; if (!r?.engine || !['recording','error'].includes(r.phase)) return;
   const id = r.meetingId; const engine = r.engine;
   clearTimeout(r.pauseTimer);
-  r.phase = 'stopping'; renderPill(); renderAskBar();
+  r.phase = 'stopping'; r.error = null; r.saveStage = 'stop capture'; renderPill(); renderAskBar();
+  document.querySelector('.who-hint')?.remove();
   live.stop();
   try {
-    const take=await engine.stop();r.phase='uploading';renderPill();await engine.uploader.drain();
+    const take=await engine.stop();r.phase='uploading';r.saveStage='upload audio';renderPill();await engine.uploader.drain();
     // Native Android owns uploads/final_seq/Stop; Mac and browser keep the existing app Stop controller.
-    if(!take.meta?.native?.backendStopOwned)await API.stop(id,{final_seq:engine.finalSeq,reason});
+    r.saveStage='confirm backend stop';
+    if(!take.meta?.native?.backendStopOwned) { const saved=await API.stop(id,{final_seq:engine.finalSeq,reason}); if(state.current?.id===id && saved?.id===id)setCurrent(saved); }
+    r.saveStage='verify saved audio and acknowledge capture';
     await engine.acknowledge();stoppedHere={id,at:Date.now()};endRecSession();
     if(state.current?.id===id)await loadMeeting(id);else loadMeetings();
     toast('Saved. Transcript and summary are on their way.');
-  }catch(e){r.phase='error';r.error='Audio retained: '+errMsg(e);renderPill();if(state.current?.id===id)renderDoc();
-    toast(r.error,{error:true,action:{label:'Retry save',fn:()=>stopRecording({reason})}});}
+  }catch(e){recordingSaveFailed(r,e);}
 }
 
 async function finishStop(id, body) {
@@ -1356,11 +1377,11 @@ function renderPillQueue() {
   const up = r.engine?.uploader; const n = up?.pending || 0; const failing = !!up?.lastError;
   if (r.phase === 'uploading' || r.phase === 'stopping') {
     if(r.engine.native && r.phase==='uploading'){el.textContent='Native recorder is saving…';return;}
-    el.textContent = r.phase === 'stopping' ? 'Finishing…' : n ? `Uploading ${n} ${n === 1 ? 'chunk' : 'chunks'}…${failing ? ` (${navigator.onLine ? 'retrying' : 'offline'})` : ''}` : 'Saving…';
+    el.textContent = r.phase === 'stopping' ? 'Finishing…' : n ? `Uploading ${n} ${n === 1 ? 'chunk' : 'chunks'}…${failing ? ` (${up.lastError?.code === 'transport_unavailable' ? 'connection failed; retrying' : 'retrying'})` : ''}` : 'Saving…';
     const btn = $('.w-btn', els.pill); if (btn) btn.hidden = !(failing && n);
     return;
   }
-  el.textContent = n > 1 || failing ? `${navigator.onLine ? '' : 'Offline · '}${n} queued` : '';
+  el.textContent = n > 1 || failing ? `${failing ? 'Retrying · ' : ''}${n} queued` : '';
   el.classList.toggle('warn', failing);
 }
 
@@ -1837,7 +1858,7 @@ function bind() {
   window.addEventListener('hashchange', () => applyRoute(parseHash()));
   mobileMQ.addEventListener('change', () => { placeAskAll(); renderPill(); });
   window.addEventListener('resize', debounce(autogrow, 100));
-  window.addEventListener('online', () => { state.rec?.engine?.uploader?.wake?.(); flushNotes(); if (state.current) renderStatus(state.current); renderPillQueue(); toast('Back online'); });
+  window.addEventListener('online', () => { state.rec?.engine?.uploader?.wake?.(); flushNotes(); if (state.current) renderStatus(state.current); renderPillQueue(); });
   window.addEventListener('offline', () => { if (state.current) renderStatus(state.current); renderPillQueue(); });
   window.addEventListener('beforeunload', (e) => { if (state.rec && state.rec.phase !== 'error') { e.preventDefault(); e.returnValue = ''; } else flushNotes(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { flushNotes(); refreshAll(); schedulePoll(); } });

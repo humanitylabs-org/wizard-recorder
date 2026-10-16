@@ -903,18 +903,53 @@ const summaryStore = {
     finally { this.loading.delete(id); if (state.current?.id === id) { if (state.docMode === 'live-summary') renderSummary(); if (state.docMode === 'transcript') renderOriginalSummary(); } }
   },
 };
+// Expansion belongs to the viewer, never the generated summary. Only explicit
+// choices persist: the newest untouched topic opens; older untouched topics close.
+const summaryExpansion = new Map();
+function summaryExpansionFor(id, snapshot) {
+  const key = `mizel.summaryExpansion.v1:${snapshot ? 'archive' : 'live'}:${id}`;
+  if (!summaryExpansion.has(key)) {
+    let choices = {};
+    try { choices = JSON.parse(sessionStorage.getItem(key) || '{}'); } catch {}
+    const entries = choices && typeof choices === 'object' && !Array.isArray(choices)
+      ? Object.entries(choices).filter(([, value]) => typeof value === 'boolean') : [];
+    summaryExpansion.set(key, new Map(entries));
+  }
+  const choices = summaryExpansion.get(key);
+  return { choices, save() { try { sessionStorage.setItem(key, JSON.stringify(Object.fromEntries(choices))); } catch {} } };
+}
 function renderSummary({ scrollEnd = false, container = els.summary, snapshot = null } = {}) {
   const box = container; if (!box) return;
   const m = state.current; if (!m) return clear(box);
   const sm = snapshot || summaryStore.get(m.id);
   const recording = !snapshot && m.status === 'recording' && isLiveHere(m);
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const scrollTop = box.scrollTop;
+  const focusedKey = box.contains(document.activeElement) ? document.activeElement.dataset.summaryFocus : null;
   const topics = (sm?.topics || []).filter((t) => t.bullets?.length);
-  const kids = topics.map((t) => h('section', { class: `sum-topic${t.active && recording ? ' is-active' : ''}` },
-    h('header', {}, h('h3', { text: t.title }), h('time', { text: fmtClock(t.startMs || 0) })),
-    h('ul', {}, ...t.bullets.map((b) => h('li', {},
+  const expansion = summaryExpansionFor(m.id, !!snapshot);
+  const rows = [];
+  const collapseAll = h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'Collapse all', dataset: { summaryFocus: 'collapse-all' }, onclick: () => {
+    for (const row of rows) { expansion.choices.set(row.key, false); row.setOpen(false); }
+    expansion.save();
+  } });
+  const kids = topics.map((t, i) => {
+    const key = String(t.id || `topic:${t.startMs || 0}:${i}`);
+    const open = expansion.choices.has(key) ? expansion.choices.get(key) : i === topics.length - 1;
+    const bodyId = `${snapshot ? 'archived' : 'live'}-summary-topic-${i}`;
+    const body = h('ul', { id: bodyId, hidden: !open }, ...t.bullets.map((b) => h('li', {},
       h('span', { text: b.text }),
-      h('button', { class: 'sum-at', type: 'button', title: player.ok ? 'Play from here' : 'Show in transcript', 'aria-label': `${player.ok ? 'Play from' : 'Show'} ${fmtClock(b.atMs || 0)}`, text: `${fmtClock(b.atMs || 0)} ↗`, onclick: () => jumpTo(b.atMs || 0) }))))));
+      h('button', { class: 'sum-at', type: 'button', title: player.ok ? 'Play from here' : 'Show in transcript', 'aria-label': `${player.ok ? 'Play from' : 'Show'} ${fmtClock(b.atMs || 0)}`, text: `${fmtClock(b.atMs || 0)} ↗`, onclick: () => jumpTo(b.atMs || 0) }))));
+    const toggle = h('button', { class: 'sum-toggle', type: 'button', 'aria-expanded': String(open), 'aria-controls': bodyId, dataset: { summaryFocus: key }, onclick: () => {
+      const next = toggle.getAttribute('aria-expanded') !== 'true';
+      expansion.choices.set(key, next); expansion.save(); setOpen(next);
+    } }, h('span', { class: 'sum-chevron', 'aria-hidden': 'true', text: '›' }),
+    h('span', { class: 'sum-title', text: t.title }), h('time', { text: fmtClock(t.startMs || 0) }));
+    function setOpen(value) { toggle.setAttribute('aria-expanded', String(value)); body.hidden = !value; }
+    rows.push({ key, setOpen });
+    return h('section', { class: `sum-topic${t.active && recording ? ' is-active' : ''}`, dataset: { topicId: key } }, h('h3', {}, toggle), body);
+  });
+  if (topics.length) kids.unshift(h('div', { class: 'sum-controls' }, collapseAll));
   if (!kids.length) {
     kids.push(h('div', { class: 'w-empty sum-empty' }, !sm && summaryStore.loading.has(m.id) ? 'Loading…'
       : summaryStore.building.has(m.id) ? 'Building the outline from the transcript…'
@@ -923,7 +958,8 @@ function renderSummary({ scrollEnd = false, container = els.summary, snapshot = 
   } else if (recording) kids.push(h('div', { class: 'sum-live' }, h('span', { class: 'w-live-dot' }), 'Updates as each stretch of transcript locks in'));
   if(!snapshot)kids.push(discussionSection(m.id));
   replace(box, ...kids);
-  if (scrollEnd || atBottom) box.scrollTop = box.scrollHeight;
+  if (focusedKey != null) [...box.querySelectorAll('[data-summary-focus]')].find(el => el.dataset.summaryFocus === focusedKey)?.focus({ preventScroll: true });
+  box.scrollTop = scrollEnd || atBottom ? box.scrollHeight : scrollTop;
 }
 function renderOriginalSummary() {
   const m = state.current, sm = m && summaryStore.get(m.id);

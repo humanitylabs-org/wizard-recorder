@@ -581,7 +581,17 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 .sum-topic header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
 .sum-topic h3 { margin: 0; flex: 1; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--w-text); }
 .sum-topic header time { font-size: 12px; color: var(--w-text-3); font-variant-numeric: tabular-nums; }
-.sum-topic.is-active h3::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--w-rec); vertical-align: middle; animation: w-pulse 1.6s infinite; }
+.sum-topic .sum-title::after { vertical-align: middle; }
+.sum-topic.is-active .sum-title::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--w-rec); animation: w-pulse 1.6s infinite; }
+.sum-controls { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.sum-controls button { min-height: 44px; }
+.sum-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.sum-toggle:focus-visible { outline: 2px solid var(--w-text-2); outline-offset: 3px; border-radius: 4px; }
+.sum-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sum-toggle time { flex: none; font-size: 12px; font-weight: normal; color: var(--w-text-3); font-variant-numeric: tabular-nums; }
+.sum-chevron { flex: none; width: 14px; text-align: center; font-size: 22px; color: var(--w-text-3); }
+.sum-toggle[aria-expanded="true"] .sum-chevron { transform: rotate(90deg); }
+.sum-topic ul[hidden] { display: none; }
 .sum-topic ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .sum-topic li { display: flex; gap: 10px; align-items: baseline; font-size: 15px; line-height: 1.5; color: var(--w-text); }
 .sum-topic li::before { content: ''; flex: none; width: 5px; height: 5px; margin-top: .62em; border-radius: 50%; background: var(--w-text-3); align-self: flex-start; }

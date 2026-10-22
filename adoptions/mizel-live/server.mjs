@@ -22,6 +22,8 @@ const WIZARD_API = process.env.WIZARD_API_URL || 'http://127.0.0.1:8865';
 // Public queue run IDs must not be sent to a different raw runtime.
 const ORB_API = process.env.WIZARD_ORB_API_URL || WIZARD_API;
 const PUBLIC_ORIGINS = new Set([...(process.env.MIZEL_ALLOWED_ORIGINS || '').split(',').filter(Boolean), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+// Build id of the served web app: an open client compares it and reloads itself when idle.
+const WEB_BUILD = (() => { try { const h = crypto.createHash('sha256'); for (const f of ['app.js', 'styles.css', 'index.html']) h.update(fs.readFileSync(path.join(WEB, f))); return h.digest('hex').slice(0, 12); } catch { return 'dev'; } })();
 const REALTIME_MODEL = process.env.MIZEL_LIVE_REALTIME_MODEL || 'voxtral-mini-4b-realtime';
 const SUMMARY_MODEL = process.env.MIZEL_LIVE_SUMMARY_MODEL || 'deepseek-v4-1-flash';
 const SUMMARY_EVERY_MS = 5000;    // check often; a pass runs once ~12 new words have locked in
@@ -550,7 +552,7 @@ const server = http.createServer(async (req, res) => {
   let p = url.pathname;
   if (p === BASE) return sendRaw(res, 308, '', 'text/plain', { Location: BASE + '/' });
   if (p.startsWith(BASE + '/')) p = p.slice(BASE.length);
-  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true, agentRouter: true }), 'application/json');
+  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true, agentRouter: true, build: WEB_BUILD }), 'application/json');
   if (p === '/orb-events' && req.method === 'GET') {
     const mid=url.searchParams.get('meetingId');
     return sendRaw(res,200,JSON.stringify({events:orbEvents.list(mid),discussions:discussionMarkdown(orbEvents.list(mid))}),'application/json');

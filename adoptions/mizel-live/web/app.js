@@ -2042,3 +2042,17 @@ function boot() {
   reattachShared();
 }
 boot();
+
+// Self-update: when a newer Mizel ships, reload on return to the app, never mid-recording or with a sheet open.
+let loadedBuild = null;
+async function checkForUpdate() {
+  try {
+    const r = await fetch('live-health', { cache: 'no-store' }).then((x) => x.json());
+    if (!r.build) return;
+    if (!loadedBuild) { loadedBuild = r.build; return; }
+    if (r.build !== loadedBuild && !state.rec && !overlay) location.reload();
+  } catch { /* offline: try next time */ }
+}
+void checkForUpdate();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkForUpdate(); });
+setInterval(() => { if (document.visibilityState === 'visible') void checkForUpdate(); }, 120000);

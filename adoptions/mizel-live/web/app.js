@@ -541,7 +541,8 @@ function renderHeader(m) {
   replace(els.topStatus, ...st);
   const segCount = m.segments?.length || 0;
   replace(els.docActions,
-    h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'Ask Archimedes', onclick: () => openManualAsk(m.id) }),
+    h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Send to…', 'data-send-to': 'true', onclick: () => openSendSheet(m) }),
+    h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'Ask', title: 'Ask an agent a question', onclick: () => openManualAsk(m.id) }),
     h('button', { class: 'w-icon-btn', type: 'button', title: 'More', 'aria-label': 'More actions', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); toggleMenu(m); } }, icon('more')));
 }
 function toggleMenu(m) {
@@ -1586,7 +1587,7 @@ function renderLive() {
   replace(el,
     ...cards.map((a) => h('article', { class: `live-card is-${a.status}`, dataset: { id: a.id }, role: 'button', tabindex: '0', 'aria-label': 'Open Archimedes answer', onclick: () => openAsk(a.id), onkeydown: (e) => { if (e.key === 'Enter') openAsk(a.id); } },
       h('header', {},
-        h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), 'Archimedes'),
+        h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), a.agentLabel || 'Archimedes'),
         h('span', { class: 'st', text: ASK_ST[a.status] || a.status }),
         h('button', { class: 'w-icon-btn x', type: 'button', 'aria-label': 'Dismiss', title: 'Dismiss (find it again under Archimedes)', onclick: (e) => { e.stopPropagation(); if (a.status === 'listening') live.control('cancel', a.id); else dismissAsk(a); } }, icon('close'))),
       h('p', { class: 'q', text: `“${a.text}”` }),
@@ -1617,7 +1618,7 @@ function askRow(a, { showMeeting = false } = {}) {
     h('span', { class: 'body' },
       h('span', { class: 'q', text: a.text }),
       h('span', { class: 'a', text: a.status === 'answered' ? stripMd(a.answer || '') : ASK_ST[a.status] || a.status }),
-      h('span', { class: 'when', text: [showMeeting ? (mt?.title || a.title || 'Recording') : null, `${dayLabel(a.createdAt)} · ${fmtTime(a.createdAt)}`].filter(Boolean).join(' · ') })));
+      h('span', { class: 'when', text: [a.agent && a.agent !== 'hermes' ? `→ ${a.agentLabel}` : null, showMeeting ? (mt?.title || a.title || 'Recording') : null, `${dayLabel(a.createdAt)} · ${fmtTime(a.createdAt)}`].filter(Boolean).join(' · ') })));
 }
 function stripMd(t) { return String(t).replace(/[*_`#>]+/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim(); }
 function renderArchimedesView() {
@@ -1630,7 +1631,7 @@ function renderArchimedesView() {
     h('h1', { class: 'title', text: 'Archimedes' }),
     h('p', { class: 'arch-sub', text: 'Messages you explicitly sent to Archimedes, newest first. Previous answers remain here too.' }),
     allAsks.loading && !list.length ? h('div', { class: 'w-empty' }, h('span', { class: 'w-spinner' }), ' Loading…')
-      : !list.length ? h('div', { class: 'w-empty', text: 'Nothing yet. Open a recording and tap Ask Archimedes.' })
+      : !list.length ? h('div', { class: 'w-empty', text: 'Nothing yet. Open a recording and tap Ask.' })
       : h('div', { class: 'arch-list' }, ...groups.flatMap((g) => [h('h2', { class: 'w-label', text: g.k }), ...g.items.map((a) => askRow(a, { showMeeting: true }))])));
 }
 function renderArchimedesSection() {
@@ -1638,7 +1639,7 @@ function renderArchimedesSection() {
   if (!m || isImported(m)) { clear(box); box.hidden = true; return; }
   const mine = allAsks.list.filter((a) => a.meetingId === m.id && a.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   box.hidden = !mine.length;
-  replace(box, mine.length ? h('div', { class: 'section-head', text: `Asked Archimedes · ${mine.length}` }) : null, ...mine.map((a) => askRow(a)));
+  replace(box, mine.length ? h('div', { class: 'section-head', text: `Asked · ${mine.length}` }) : null, ...mine.map((a) => askRow(a)));
 }
 async function refreshMeetingAsks(id) {
   try { const r = await fetch(`asks?meetingId=${enc(id)}`).then((x) => x.json());
@@ -1654,7 +1655,7 @@ async function openAskSheetFor(id, refresh = false) {
   if (!a) { toast('That answer is no longer here.'); if (state.route.ask) history.back(); return; }
   if (refresh && overlay?.askId !== id) return;
   const mt = state.meetings.find((x) => x.id === a.meetingId) || (state.current?.id === a.meetingId ? state.current : null);
-  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': 'Archimedes answer' },
+  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': `${a.agentLabel || 'Archimedes'} answer` },
     h('div', { class: 'grabber', 'aria-hidden': 'true' }),
     h('header', {},
       h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), 'Archimedes'),
@@ -1676,25 +1677,85 @@ async function openAskSheetFor(id, refresh = false) {
 }
 
 // Explicit public-agent message: never prefill with recording content.
+// Agent router: the owner picks which Wizard agent gets this. Remembered per recording.
+const agentStore = { list: null, at: 0 };
+async function loadAgents(meetingId) {
+  const r = await api(`agents?${new URLSearchParams({ meetingId: meetingId || '' })}`);
+  agentStore.list = r.agents || []; agentStore.at = Date.now();
+  return r;
+}
+function agentPicker(meetingId, { onChange } = {}) {
+  const pick = { value: '', label: 'Archimedes', ready: false };
+  const row = h('div', { class: 'agent-pick', role: 'radiogroup', 'aria-label': 'Send to agent' }, h('span', { class: 'w-spinner' }));
+  const draw = (agents) => {
+    replace(row, ...agents.map((a) => h('button', { type: 'button', role: 'radio', class: 'w-chip agent-chip', 'aria-checked': String(a.id === pick.value), dataset: { agent: a.id },
+      onclick: () => { pick.value = a.id; pick.label = a.label; draw(agents); onChange?.(pick); } },
+      h('span', { class: 'agent-dot', 'aria-hidden': 'true' }), a.label)));
+  };
+  loadAgents(meetingId).then((r) => {
+    const agents = r.agents || [];
+    const sel = agents.find((a) => a.id === r.selected) || agents[0];
+    if (sel) { pick.value = sel.id; pick.label = sel.label; }
+    pick.ready = true; draw(agents); onChange?.(pick);
+  }).catch((e) => replace(row, h('p', { class: 'err', text: `Couldn't load agents: ${errMsg(e)}` })));
+  return { el: row, pick };
+}
+function openSendSheet(m) {
+  let sending = false;
+  const title = h('h2', { text: 'Send to Archimedes' });
+  const send = h('button', { class: 'w-btn w-btn-primary', type: 'button', text: 'Send', disabled: true });
+  const picker = agentPicker(m.id, { onChange: (p) => { title.textContent = `Send to ${p.label}`; send.disabled = !p.ready || sending; } });
+  const note = h('textarea', { class: 'w-input', rows: '3', maxlength: '4000', placeholder: 'Optional: what should it do with this? (e.g. pull out action items)', 'aria-label': 'Note to the agent', style: 'width:100%;resize:vertical;margin:12px 0 4px' });
+  const error = h('p', { class: 'err', role: 'status' });
+  const done = h('div', { class: 'send-done', hidden: true });
+  const past = h('div', { class: 'send-past' });
+  fetch(`sends?meetingId=${enc(m.id)}`).then((x) => x.json()).then((r) => {
+    const sent = (r.sends || []).filter((x) => x.status === 'sent' && x.threadId);
+    if (sent.length) replace(past, h('div', { class: 'w-label', text: 'Sent before' }), ...sent.slice(0, 5).map((x) => h('a', { class: 'send-row', href: threadHref(x.threadId), target: '_top' },
+      h('span', { text: x.agentLabel }), h('span', { class: 'when', text: `${dayLabel(x.createdAt)} · ${fmtTime(x.createdAt)}` }))));
+  }).catch(() => {});
+  send.onclick = async () => {
+    if (sending || !picker.pick.value) return;
+    sending = true; send.disabled = true; send.textContent = 'Sending…'; error.textContent = '';
+    try {
+      const r = await api('send', { method: 'POST', json: { meetingId: m.id, agent: picker.pick.value, note: note.value.trim() } });
+      const x = r.send;
+      replace(done, h('p', { text: `Sent to ${x.agentLabel}. The reply lands in a new thread.` }),
+        x.threadId ? h('a', { class: 'w-btn w-btn-primary', href: threadHref(x.threadId), target: '_top', 'data-open-thread': 'true' }, `Open ${x.agentLabel} thread`) : null);
+      done.hidden = false; picker.el.hidden = true; note.hidden = true; send.hidden = true;
+      toast(`Sent to ${x.agentLabel}`);
+    } catch (e) { error.textContent = errMsg(e); sending = false; send.disabled = false; send.textContent = 'Send'; }
+  };
+  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet send-sheet', role: 'dialog', 'aria-label': 'Send recording to an agent' },
+    h('div', { class: 'grabber', 'aria-hidden': 'true' }),
+    h('header', {}, title, h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
+    h('p', { class: 'send-what', text: `“${m.title || 'Untitled meeting'}”: transcript, Memory bullets and notes go to the agent you pick. Nothing is sent until you tap Send.` }),
+    picker.el, note, error, done, past,
+    h('div', { class: 'acts' }, h('button', { class: 'w-btn', type: 'button', text: 'Close', onclick: () => closeOverlay() }), send)));
+  overlay.manualHistory = true; history.pushState({ mizelManualComposer: true }, '', location.href);
+  el.dataset.sendSheet = 'true';
+}
 function openManualAsk(meetingId) {
   let sending = false;
-  const input = h('textarea', { class: 'w-input', rows: '4', maxlength: '6000', placeholder: 'Your message to Archimedes…', 'aria-label': 'Message to Archimedes', style: 'width:100%;resize:vertical;margin:12px 0' });
+  const heading = h('h2', { text: 'Ask Archimedes' });
+  const input = h('textarea', { class: 'w-input', rows: '4', maxlength: '6000', placeholder: 'Your message…', 'aria-label': 'Message to the agent', style: 'width:100%;resize:vertical;margin:12px 0' });
+  const picker = agentPicker(meetingId, { onChange: (p) => { heading.textContent = `Ask ${p.label}`; } });
   const error = h('p', { class: 'err', role: 'status' });
   const send = h('button', { class: 'w-btn w-btn-primary', type: 'button', text: 'Send to Wizard', onclick: async () => {
     const text = input.value.trim(); if (!text || sending) return;
     sending = true; send.disabled = true; error.textContent = '';
     try {
-      const r = await api('manual-ask', { method: 'POST', json: { meetingId, text } });
+      const r = await api('manual-ask', { method: 'POST', json: { meetingId, text, ...(picker.pick.value ? { agent: picker.pick.value } : {}) } });
       live.asks.set(r.ask.id, r.ask);
       allAsks.list.unshift(r.ask);
       renderLive(); renderArchimedesSection(); openAsk(r.ask.id);
     } catch (e) { error.textContent = errMsg(e); sending = false; send.disabled = false; }
   } });
-  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': 'Ask Archimedes' },
+  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': 'Ask an agent' },
     h('div', { class: 'grabber', 'aria-hidden': 'true' }),
-    h('header', {}, h('h2', { text: 'Ask Archimedes' }), h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
-    h('p', { text: 'Only the message you send goes to your Wizard model. Your recording and transcript stay private.' }),
-    input, error,
+    h('header', {}, heading, h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
+    h('p', { text: 'Only the message you type goes to the agent. To share the transcript, use Send to….' }),
+    picker.el, input, error,
     h('div', { class: 'acts' }, h('button', { class: 'w-btn', type: 'button', text: 'Cancel', onclick: () => closeOverlay() }), send)));
   overlay.manualHistory = true; history.pushState({ mizelManualComposer: true }, '', location.href);
   el.dataset.manualAsk = 'true'; input.focus();

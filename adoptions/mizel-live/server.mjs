@@ -8,6 +8,7 @@ import { WebSocketServer } from 'ws';
 import { TinfoilProvider, parseSummaryDelta } from './provider.js';
 import { OrbEvents, discussionMarkdown } from './orb-events.mjs';
 import { queueAuthority, threadMessages } from './orb-authority.mjs';
+import { MAIN_AGENT, publicAgents, validAgentId, transcriptPacket, threadTitle } from './agent-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.HOME;
@@ -83,7 +84,7 @@ function asksFor(meetingId) {
   return Object.values(state.asks).filter((a) => a.meetingId === meetingId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 const publicAsk = (a) => ({ id: a.id, meetingId: a.meetingId, title: a.title || '', text: a.text, status: a.status, answer: a.answer || null, error: a.error || null,
-  threadId: a.threadId || null, createdAt: a.createdAt, latency: a.latency || null, endedBy: a.endedBy || null, dismissed: !!a.dismissed });
+  threadId: a.threadId || null, agent: a.agent || MAIN_AGENT, agentLabel: a.agentLabel || 'Archimedes', createdAt: a.createdAt, latency: a.latency || null, endedBy: a.endedBy || null, dismissed: !!a.dismissed });
 
 
 // ───────────── Live summary: append-only topics + bullets, as in the Mizel.ai app ─────────────
@@ -198,6 +199,80 @@ async function wizard(pathname, { method = 'GET', json, headers = {} } = {}) {
   if (!res.ok) throw new Error(`Wizard ${method} ${pathname} → ${res.status}: ${JSON.stringify(data).slice(0, 200)}`);
   return data;
 }
+// ───────────── Agent router: send a recording, or an ask, to the agent the owner picks ─────────────
+// Agent threads go through the Wizard service (the orb's prefix), which routes `agent` to that agent's runtime.
+const AGENTS_URL = process.env.WIZARD_AGENTS_URL || (() => { try { const u = new URL(ORB_API); return `${u.origin}/wizard/v1/agents`; } catch { return ''; } })();
+async function orbCall(pathname, { method = 'GET', json, headers = {}, agent = '' } = {}) {
+  const q = agent ? `${pathname.includes('?') ? '&' : '?'}agent=${encodeURIComponent(agent)}` : '';
+  const res = await fetch(ORB_API + pathname + q, {
+    method,
+    headers: { Authorization: 'Bearer ' + secrets.API_SERVER_KEY, ...(json ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: json ? JSON.stringify(agent ? { ...json, agent } : json) : undefined,
+    signal: AbortSignal.timeout(30000),
+  });
+  const text = await res.text();
+  let data = null; try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 300) }; }
+  if (!res.ok) throw new Error(`Wizard ${method} ${pathname} → ${res.status}: ${JSON.stringify(data).slice(0, 200)}`);
+  return data;
+}
+let agentCache = { at: 0, list: null };
+async function listAgents({ fresh = false } = {}) {
+  if (process.env.MIZEL_LIVE_DRY === '1' && process.env.MIZEL_LIVE_DRY_AGENTS) return publicAgents(JSON.parse(process.env.MIZEL_LIVE_DRY_AGENTS));
+  if (!fresh && agentCache.list && Date.now() - agentCache.at < 30000) return agentCache.list;
+  if (!AGENTS_URL) return [{ id: MAIN_AGENT, label: 'Archimedes', privacy: 'standard', status: 'running' }];
+  const res = await fetch(AGENTS_URL, { headers: { Authorization: 'Bearer ' + secrets.API_SERVER_KEY }, signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`agents ${res.status}`);
+  const list = publicAgents(await res.json());
+  if (!list.some((a) => a.id === MAIN_AGENT)) list.unshift({ id: MAIN_AGENT, label: 'Archimedes', privacy: 'standard', status: 'running' });
+  agentCache = { at: Date.now(), list };
+  return list;
+}
+async function resolveAgent(id) {
+  const want = id || MAIN_AGENT;
+  if (!validAgentId(want)) throw Object.assign(new Error('Unknown agent'), { status: 400 });
+  const agent = (await listAgents()).find((a) => a.id === want) || (await listAgents({ fresh: true })).find((a) => a.id === want);
+  if (!agent) throw Object.assign(new Error('That agent is not available right now'), { status: 404 });
+  return agent;
+}
+function rememberAgent(meetingId, agentId) {
+  state.routes = state.routes || {};
+  if (meetingId) state.routes[meetingId] = agentId;
+  state.lastAgent = agentId;
+}
+async function createAgentThread(agentId, title) {
+  const id = `wizard_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+  const candidates = [title, `${title} · ${crypto.randomBytes(2).toString('hex')}`, `${title} · ${crypto.randomBytes(3).toString('hex')}`];
+  for (let i = 0; i < candidates.length; i++) {
+    try { await orbCall('/api/sessions', { method: 'POST', agent: agentId, json: { id, source: 'wizard-mobile', title: candidates[i].slice(0, 90) } }); return id; }
+    catch (e) { if (!/invalid_title|already in use/i.test(e.message) || i === candidates.length - 1) throw e; }
+  }
+  return id;
+}
+const publicSend = (x) => ({ id: x.id, meetingId: x.meetingId, agent: x.agent, agentLabel: x.agentLabel, note: x.note || '', status: x.status, error: x.error || null,
+  threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0 });
+async function sendRecording(send) {
+  const mid = send.meetingId;
+  try {
+    const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`recording unavailable (${r.status})`);
+    const meeting = await r.json();
+    const packet = transcriptPacket({ meeting, summary: summaryFor(mid), note: send.note, agentLabel: send.agentLabel });
+    send.segments = packet.segments;
+    if (process.env.MIZEL_LIVE_DRY === '1') {   // QA instance: no Wizard thread or run
+      send.threadId = `dry_${send.id.slice(-8)}`; send.status = 'sent'; send.dryPacket = packet.text.slice(0, 4000); save();
+      logEvent('send.dry', { sendId: send.id, meetingId: mid, agent: send.agent });
+      return;
+    }
+    send.threadId = await createAgentThread(send.agent, threadTitle(packet.title, send.agentLabel)); save();
+    const run = await orbCall('/v1/runs', { method: 'POST', agent: send.agent, json: { session_id: send.threadId, input: packet.text }, headers: { 'Idempotency-Key': send.id } });
+    send.runId = run.run_id || run.id; send.status = 'sent'; save();
+    logEvent('send.started', { sendId: send.id, meetingId: mid, agent: send.agent, threadId: send.threadId, runId: send.runId, segments: packet.segments });
+  } catch (e) {
+    send.status = 'failed'; send.error = `Didn't reach ${send.agentLabel}. Tap Send again. (${String(e.message || e).slice(0, 140)})`; save();
+    logEvent('send.error', { sendId: send.id, agent: send.agent, error: String(e.message || e).slice(0, 200) });
+  }
+}
+
 async function liveThreadFor(meetingId, title) {
   if (state.threads[meetingId]) return state.threads[meetingId];
   const id = `wizard_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
@@ -225,18 +300,21 @@ async function dispatchAsk(ask, title) {
     ask.status = 'answered'; ask.answer = process.env.MIZEL_LIVE_DRY_LONG ? ('[dry run] long answer. ' + 'Here is a longer paragraph to check scrolling in the full answer sheet on a phone. '.repeat(40)) : '[dry run] would ask Archimedes'; save();
     return broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
   }
+  const routed = ask.agent && ask.agent !== MAIN_AGENT;
+  const call = routed ? (pathname, opts = {}) => orbCall(pathname, { ...opts, agent: ask.agent }) : wizard;
+  const who = ask.agentLabel || 'Archimedes';
   try {
-    const threadId = await liveThreadFor(ask.id, 'Mizel.ai · Manual ask');
+    const threadId = routed ? await createAgentThread(ask.agent, `Mizel.ai · Ask → ${who}`) : await liveThreadFor(ask.id, 'Mizel.ai · Manual ask');
     ask.threadId = threadId; save();
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
-    const run = await wizard('/v1/runs', { method: 'POST', json: { session_id: threadId, input: promptFor(ask, title) }, headers: { 'Idempotency-Key': ask.id } });
+    const run = await call('/v1/runs', { method: 'POST', json: { session_id: threadId, input: promptFor(ask, title) }, headers: { 'Idempotency-Key': ask.id } });
     ask.runId = run.run_id || run.id; save();
     logEvent('run.started', { askId: ask.id, runId: ask.runId, threadId });
     const deadline = Date.now() + RUN_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1500));
       let r;
-      try { r = await wizard(`/v1/runs/${encodeURIComponent(ask.runId)}`); } catch { continue; }
+      try { r = await call(`/v1/runs/${encodeURIComponent(ask.runId)}`); } catch { continue; }
       if (ask.status === 'cancelled') return;
       if (['completed', 'failed', 'cancelled', 'interrupted'].includes(r.status)) {
         if (r.status === 'completed' && r.output) {
@@ -253,7 +331,7 @@ async function dispatchAsk(ask, title) {
     ask.status = 'failed'; ask.error = 'Still working after 10 minutes. The answer will land in the Live thread.'; save();
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
   } catch (e) {
-    ask.status = 'failed'; ask.error = `Couldn't start the Live thread, so this didn't reach Archimedes. Tap Retry. (${e.message.slice(0, 140)})`; save();
+    ask.status = 'failed'; ask.error = `Couldn't start the thread, so this didn't reach ${who}. Tap Retry. (${e.message.slice(0, 140)})`; save();
     logEvent('run.error', { askId: ask.id, error: e.message });
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
   }
@@ -472,7 +550,7 @@ const server = http.createServer(async (req, res) => {
   let p = url.pathname;
   if (p === BASE) return sendRaw(res, 308, '', 'text/plain', { Location: BASE + '/' });
   if (p.startsWith(BASE + '/')) p = p.slice(BASE.length);
-  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true }), 'application/json');
+  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true, agentRouter: true }), 'application/json');
   if (p === '/orb-events' && req.method === 'GET') {
     const mid=url.searchParams.get('meetingId');
     return sendRaw(res,200,JSON.stringify({events:orbEvents.list(mid),discussions:discussionMarkdown(orbEvents.list(mid))}),'application/json');
@@ -513,14 +591,18 @@ const server = http.createServer(async (req, res) => {
       if (bytes > 16000) { overflow = true; chunks = []; return; }
       chunks.push(chunk);
     });
-    req.on('end', () => {
+    req.on('end', async () => {
       if (overflow) return sendRaw(res, 413, 'message too large');
       let msg; try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return sendRaw(res, 400, 'bad JSON'); }
       if (!msg || typeof msg !== 'object' || Array.isArray(msg) || typeof msg.meetingId !== 'string' || typeof msg.text !== 'string') return sendRaw(res, 400, 'meetingId and text must be strings');
       const mid = msg.meetingId; const text = msg.text.trim();
       if (!/^[A-Za-z0-9_-]{3,64}$/.test(mid) || !text || text.length > 6000) return sendRaw(res, 400, 'meetingId and message required');
       // Payload allowlist: context, transcript, title, and legacy wake fields are ignored.
-      const ask = { id: `ask_${crypto.randomUUID()}`, meetingId: mid, title: 'Manual ask', text, context: '', origin: 'manual-button', status: 'working', createdAt: new Date().toISOString() };
+      if (msg.agent !== undefined && !validAgentId(msg.agent)) return sendRaw(res, 400, 'unknown agent');
+      let agent;
+      try { agent = await resolveAgent(msg.agent); } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); }
+      const ask = { id: `ask_${crypto.randomUUID()}`, meetingId: mid, title: 'Manual ask', text, context: '', origin: 'manual-button', status: 'working', createdAt: new Date().toISOString(), agent: agent.id, agentLabel: agent.label };
+      rememberAgent(mid, agent.id);
       state.asks[ask.id] = ask; save();
       logEvent('ask.manual', { askId: ask.id, meetingId: mid });
       broadcast(mid, { type: 'ask', ask: publicAsk(ask) });
@@ -528,6 +610,38 @@ const server = http.createServer(async (req, res) => {
       void dispatchAsk(ask, 'Manual ask');
     });
     return;
+  }
+  if (p === '/agents' && req.method === 'GET') {
+    const mid = url.searchParams.get('meetingId') || '';
+    try {
+      const agents = await listAgents();
+      const pick = [state.routes?.[mid], state.lastAgent, MAIN_AGENT].find((id) => id && agents.some((a) => a.id === id));
+      return sendRaw(res, 200, JSON.stringify({ agents, selected: pick || MAIN_AGENT }), 'application/json');
+    } catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Agents unavailable: ${String(e.message || e).slice(0, 120)}` }), 'application/json'); }
+  }
+  if (p === '/sends' && req.method === 'GET') {
+    const mid = url.searchParams.get('meetingId') || '';
+    const list = Object.values(state.sends || {}).filter((x) => !mid || x.meetingId === mid).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50).map(publicSend);
+    return sendRaw(res, 200, JSON.stringify({ sends: list }), 'application/json');
+  }
+  if (p === '/send' && req.method === 'POST') {
+    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    let msg;
+    try {
+      const chunks = []; let bytes = 0;
+      for await (const c of req) { bytes += c.length; if (bytes > 16000) return sendRaw(res, 413, 'message too large'); chunks.push(c); }
+      msg = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch { return sendRaw(res, 400, 'bad JSON'); }
+    if (!msg || typeof msg !== 'object' || typeof msg.meetingId !== 'string' || !/^[A-Za-z0-9_-]{3,64}$/.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
+    const note = typeof msg.note === 'string' ? msg.note.trim().slice(0, 4000) : '';
+    let agent;
+    try { agent = await resolveAgent(msg.agent); } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); }
+    state.sends = state.sends || {};
+    const send = { id: `send_${crypto.randomUUID()}`, meetingId: msg.meetingId, agent: agent.id, agentLabel: agent.label, note, status: 'sending', createdAt: new Date().toISOString() };
+    state.sends[send.id] = send; rememberAgent(msg.meetingId, agent.id); save();
+    logEvent('send.requested', { sendId: send.id, meetingId: send.meetingId, agent: agent.id });
+    await sendRecording(send);
+    return sendRaw(res, send.status === 'failed' ? 502 : 200, JSON.stringify({ send: publicSend(send) }), 'application/json');
   }
   if (p === '/asks' && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId');

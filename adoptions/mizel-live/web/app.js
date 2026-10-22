@@ -494,7 +494,7 @@ function renderDoc() {
   if (state.currentLoading) {
     els.title.textContent = ''; els.title.classList.add('w-skeleton'); els.title.removeAttribute('contenteditable');
     replace(els.eyebrow, h('span', { class: 'w-skeleton', text: 'Thursday, 8 October · 2:00 PM' }));
-    clear(els.meta); clear(els.docActions); clear(els.topStatus); clear(els.docStatus); clear(els.docToolbar); clear(els.asks); clear(els.conflict); els.conflict.hidden = true;
+    clear(els.meta); clear(els.docActions); clear(els.topStatus); clear(els.docStatus); els.docRoute.hidden = true; clear(els.docToolbar); clear(els.asks); clear(els.conflict); els.conflict.hidden = true;
     els.notepad.hidden = true; els.enhanced.hidden = false; els.transcriptInline.hidden = true; els.summary.hidden = true; els.notesView.hidden = true; els.notesActions.hidden = true;
     replace(els.enhanced, h('div', { class: 'placeholder' }, ...[92, 78, 85, 40].map((w) => h('div', { class: 'w-skeleton line', style: `width:${w}%` }))));
     renderSaved(); renderAskBar(); renderPill();
@@ -504,7 +504,7 @@ function renderDoc() {
   if (!m) {
     const notFound = state.currentError?.status === 404;
     els.title.textContent = notFound ? 'Meeting not found' : 'Couldn’t open this meeting'; els.title.removeAttribute('contenteditable');
-    clear(els.eyebrow); clear(els.meta); clear(els.docActions); clear(els.topStatus); clear(els.docToolbar); clear(els.asks);
+    clear(els.eyebrow); clear(els.meta); clear(els.docActions); clear(els.topStatus); els.docRoute.hidden = true; clear(els.docToolbar); clear(els.asks);
     replace(els.docStatus, h('div', { class: `w-notice ${notFound ? '' : 'is-danger'}` },
       h('span', { class: 'msg', text: notFound ? 'It may have been deleted.' : errMsg(state.currentError || {}) }),
       !notFound && h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Retry', onclick: () => loadMeeting(state.route.id) }),
@@ -541,15 +541,14 @@ function renderHeader(m) {
   replace(els.topStatus, ...st);
   const segCount = m.segments?.length || 0;
   replace(els.docActions,
-    isImported(m) ? null : h('button', { class: 'w-btn w-btn-sm finish-chip', type: 'button', text: 'When done → …', 'data-finish-route': 'true', onclick: () => openFinishSheet(m) }),
-    h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'Ask Archimedes', onclick: () => openManualAsk(m.id) }),
     h('button', { class: 'w-icon-btn', type: 'button', title: 'More', 'aria-label': 'More actions', 'aria-haspopup': 'menu', onclick: (e) => { e.stopPropagation(); toggleMenu(m); } }, icon('more')));
-  if (!isImported(m)) void renderFinishChip(m);
+  void renderRoute(m);
 }
 function toggleMenu(m) {
   if (closeMenu()) return;
   const fileName = `${(m.title || 'meeting').replace(/[\\/:*?"<>|]+/g, '-')}.md`;
   const menu = h('div', { class: 'w-menu', role: 'menu', onclick: (e) => e.stopPropagation() },
+    h('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); openManualAsk(m.id); } }, icon('spark'), 'Ask Archimedes…'),
     h('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); copyMarkdown(m); } }, icon('copy'), 'Copy as Markdown'),
     h('a', { href: API.exportUrl(m.id), download: fileName, role: 'menuitem', onclick: () => setTimeout(closeMenu) }, icon('download'), 'Export .md'),
     m.source === 'meetings' && h('hr'),
@@ -1678,48 +1677,160 @@ async function openAskSheetFor(id, refresh = false) {
 }
 
 // Explicit public-agent message: never prefill with recording content.
-// Where this recording's transcript goes when it finishes. The pick also becomes the default for new recordings.
-function finishChipLabel(r) {
-  if (r.sent) return `Sent → ${r.sent.agentLabel}`;
-  const a = (r.agents || []).find((x) => x.id === r.route);
-  return a ? `When done → ${a.label}` : 'When done → nobody';
+// ───────── Where the finished transcript goes ─────────
+// Every recording goes to the private agent unless this one recording is pointed somewhere else.
+const DEFAULT_AGENT = 'private';
+const AGENT_NAMES = { private: 'Private agent', hermes: 'Archimedes' };
+const AGENT_NOTES = { private: 'Only you can read it', hermes: 'Your main agent' };
+let agentList = { at: 0, list: null };
+async function wizardAgents() {
+  if (agentList.list && Date.now() - agentList.at < 60000) return agentList.list;
+  let raw = [];
+  try { const r = await fetch('/wizard/v1/agents', { credentials: 'same-origin', cache: 'no-store' }); if (r.ok) raw = (await r.json()).agents || []; } catch { /* fall back below */ }
+  if (!raw.length) { try { raw = (await api('agents')).agents || []; } catch { raw = []; } }
+  const list = raw.filter((a) => a && /^[a-z][a-z0-9-]{0,30}$/.test(a.id) && a.status !== 'stopped' && a.status !== 'removed' && a.role !== 'recovery')
+    .map((a) => ({ id: a.id, label: AGENT_NAMES[a.id] || a.label || a.id, privacy: a.privacy === 'private' ? 'private' : 'standard' }));
+  const rank = (a) => (a.id === DEFAULT_AGENT ? 0 : a.id === 'hermes' ? 1 : 2);
+  list.sort((x, y) => rank(x) - rank(y) || x.label.localeCompare(y.label));
+  agentList = { at: Date.now(), list };
+  return list;
 }
-async function renderFinishChip(m) {
-  const chip = els.docActions?.querySelector('[data-finish-route]'); if (!chip) return;
-  try { const r = await api(`finish-route?${new URLSearchParams({ meetingId: m.id })}`); if (state.current?.id === m.id) chip.textContent = finishChipLabel(r); }
-  catch { chip.textContent = 'When done → ?'; }
+const agentName = (id, list = agentList.list || []) => (id === 'none' ? 'Nobody' : list.find((a) => a.id === id)?.label || AGENT_NAMES[id] || id);
+const routeCache = new Map();
+async function loadRoute(mid, maxAge = 0) {
+  const hit = routeCache.get(mid);
+  if (hit && Date.now() - hit.at < maxAge) return hit.r;
+  const r = await api(`finish-route?${new URLSearchParams({ meetingId: mid })}`); routeCache.set(mid, { at: Date.now(), r }); return r;
 }
-async function openFinishSheet(m) {
-  let r; try { r = await api(`finish-route?${new URLSearchParams({ meetingId: m.id })}`); } catch (e) { toast(errMsg(e), { error: true }); return; }
-  const ready = m.status === 'ready';
-  let choice = r.route || 'none';
-  const error = h('p', { class: 'err', role: 'status' });
-  const list = h('div', { class: 'agent-pick', role: 'radiogroup', 'aria-label': 'Send the finished transcript to' });
-  const opts = [...(r.agents || []), { id: 'none', label: 'Nobody (summary stays in Mizel)' }];
-  const save = async (id) => {
-    choice = id; draw(); error.textContent = '';
-    try { const x = await api('finish-route', { method: 'POST', json: { meetingId: m.id, agent: id } }); r = { ...r, ...x }; renderFinishChip(m); }
-    catch (e) { error.textContent = errMsg(e); }
+
+function routeRow({ glyph, tone = '', title, sub, onclick, href, trailing = 'chev', busy = false }) {
+  const kids = [
+    h('span', { class: `rt-ic ${tone}` }, busy ? h('span', { class: 'rt-spin', 'aria-hidden': 'true' }) : icon(glyph)),
+    h('span', { class: 'rt-text' }, h('span', { class: 'rt-title' }, ...title), h('span', { class: 'rt-sub', text: sub })),
+    trailing ? h('span', { class: 'rt-trail' }, trailing === 'chev' ? icon('chev') : trailing) : null,
+  ];
+  return href ? h('a', { class: 'rt', href, target: '_top' }, ...kids) : h('button', { class: 'rt', type: 'button', onclick }, ...kids);
+}
+async function renderRoute(m) {
+  const el = els.docRoute; if (!el) return;
+  if (!m || isImported(m)) { el.hidden = true; return; }
+  let r, list;
+  try { [r, list] = await Promise.all([loadRoute(m.id, 8000), wizardAgents()]); } catch { el.hidden = true; return; }
+  if (state.current?.id !== m.id) return;
+  const name = agentName(r.route, list);
+  const glyphFor = (id) => (id === 'none' ? 'off' : id === DEFAULT_AGENT ? 'lock' : 'agent');
+  let row;
+  if (r.sent) {
+    row = routeRow({ glyph: 'check', tone: 'is-done', title: ['Sent to ', h('b', { text: agentName(r.sent.agent, list) })], sub: `${dayLabel(r.sent.createdAt)} · ${fmtTime(r.sent.createdAt)} · Open thread`, href: threadHref(r.sent.threadId) });
+  } else if (r.last?.status === 'sending') {
+    row = routeRow({ busy: true, title: ['Sending to ', h('b', { text: name })], sub: 'Transcript and summary', trailing: null });
+  } else if (r.last?.status === 'failed') {
+    row = routeRow({ glyph: glyphFor(r.route), tone: 'is-warn', title: ['Couldn’t reach ', h('b', { text: name })], sub: 'Tap to try again', onclick: () => openRouteSheet(m) });
+  } else {
+    const finished = m.status === 'ready';
+    const sub = r.route === 'none' ? 'This recording stays in Mizel'
+      : !r.eligible ? 'Recorded before auto-send · Tap to send'
+      : finished ? (r.due ? 'Sending now…' : 'Sends when the summary is ready')
+      : r.isDefault ? 'Default · sends when you stop' : 'Just this recording';
+    row = routeRow({ glyph: glyphFor(r.route), tone: r.route === DEFAULT_AGENT ? 'is-private' : '', title: [r.route === 'none' ? 'Not sending' : 'Sends to ', r.route === 'none' ? null : h('b', { text: name })], sub, onclick: () => openRouteSheet(m), trailing: h('span', { class: 'rt-change', text: 'Change' }) });
+  }
+  replace(el, row); el.hidden = false;
+}
+
+async function openRouteSheet(m) {
+  let r, list;
+  try { [r, list] = await Promise.all([loadRoute(m.id), wizardAgents()]); } catch (e) { toast(errMsg(e), { error: true }); return; }
+  let choice = r.route;
+  const error = h('p', { class: 'rs-err', role: 'status' });
+  const opts = [...list, { id: 'none', label: 'Don’t send', note: 'Keep this recording in Mizel only' }];
+  const finished = m.status === 'ready';
+  const canSendNow = () => finished && choice !== 'none' && (!r.sent || r.sent.agent !== choice);
+  const body = h('div', { class: 'rs-list', role: 'radiogroup', 'aria-label': 'Send this recording to' });
+  const sendBtn = h('button', { class: 'w-btn w-btn-primary rs-send', type: 'button', onclick: () => sendNow() });
+  const foot = h('div', { class: 'rs-foot' });
+  const drawFoot = () => {
+    sendBtn.textContent = `Send to ${agentName(choice, list)} now`;
+    replace(foot, h('p', { class: 'rs-note' }, choice === DEFAULT_AGENT || choice === r.default ? 'New recordings always go to ' : 'Only this recording changes. New recordings still go to ', h('b', { text: 'Private agent' }), '.'),
+      canSendNow() ? sendBtn : null);
   };
-  const draw = () => replace(list, ...opts.map((a) => h('button', { type: 'button', role: 'radio', class: 'w-chip agent-chip', 'aria-checked': String(a.id === choice), dataset: { agent: a.id }, onclick: () => save(a.id) },
-    h('span', { class: 'agent-dot', 'aria-hidden': 'true' }), a.label)));
+  const pick = async (id) => {
+    if (id === choice) return;
+    const prev = choice; choice = id; draw(); error.textContent = '';
+    try { await api('finish-route', { method: 'POST', json: { meetingId: m.id, agent: id } }); routeCache.delete(m.id); void renderRoute(m); }
+    catch (e) { choice = prev; draw(); error.textContent = errMsg(e); }
+  };
+  const draw = () => {
+    replace(body, ...opts.map((a) => {
+      const on = a.id === choice;
+      const note = a.note || (a.id === DEFAULT_AGENT ? AGENT_NOTES[a.id] : AGENT_NOTES[a.id] || (a.privacy === 'private' ? 'Private' : 'Standard agent'));
+      return h('button', { type: 'button', role: 'radio', class: 'rs-opt', 'aria-checked': String(on), dataset: { agent: a.id }, onclick: () => pick(a.id) },
+        h('span', { class: `rs-ic${a.id === DEFAULT_AGENT ? ' is-private' : ''}` }, icon(a.id === 'none' ? 'off' : a.id === DEFAULT_AGENT ? 'lock' : 'agent')),
+        h('span', { class: 'rs-text' }, h('span', { class: 'rs-name' }, a.label, a.id === DEFAULT_AGENT ? h('span', { class: 'rs-tag', text: 'Default' }) : null), h('span', { class: 'rs-sub', text: note })),
+        h('span', { class: 'rs-check', 'aria-hidden': 'true' }, on ? icon('check') : null));
+    }));
+    drawFoot();
+  };
+  const sendNow = async () => {
+    sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; error.textContent = '';
+    try {
+      const target = list.find((a) => a.id === choice);
+      const res = await deliver(m.id, choice, { manual: true, label: agentName(choice, list), viaDevice: target?.privacy === 'private' });
+      toast(`Sent to ${agentName(choice, list)}`); closeOverlay(); routeCache.delete(m.id); void renderRoute(m); void res;
+    } catch (e) { error.textContent = errMsg(e); sendBtn.disabled = false; drawFoot(); }
+  };
   draw();
-  const sendNow = h('button', { class: 'w-btn w-btn-primary', type: 'button', text: 'Send now', 'data-send-now': 'true', onclick: async () => {
-    if (choice === 'none') { error.textContent = 'Pick an agent first.'; return; }
-    sendNow.disabled = true; sendNow.textContent = 'Sending…';
-    try { const x = await api('send', { method: 'POST', json: { meetingId: m.id, agent: choice } }); toast(`Sent to ${x.send.agentLabel}`); closeOverlay(); renderFinishChip(m); }
-    catch (e) { error.textContent = errMsg(e); sendNow.disabled = false; sendNow.textContent = 'Send now'; }
-  } });
-  const sent = (r.sends || []).filter((x) => x.status === 'sent' && x.threadId);
-  openOverlay(() => h('div', { class: 'sheet ask-sheet send-sheet', role: 'dialog', 'aria-label': 'Where the finished transcript goes' },
+  openOverlay(() => h('div', { class: 'sheet ask-sheet route-sheet', role: 'dialog', 'aria-label': 'Send this recording to' },
     h('div', { class: 'grabber', 'aria-hidden': 'true' }),
-    h('header', {}, h('h2', { text: 'When it finishes, send to' }), h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
-    h('p', { class: 'send-what', text: 'The full transcript and summary go to this agent in a new thread as soon as the recording is done. Your pick is also used for new recordings.' }),
-    list, error,
-    sent.length ? h('div', { class: 'send-past' }, h('div', { class: 'w-label', text: 'Sent' }), ...sent.slice(0, 5).map((x) => h('a', { class: 'send-row', href: threadHref(x.threadId), target: '_top' },
-      h('span', { text: `${x.agentLabel} · open thread` }), h('span', { class: 'when', text: `${dayLabel(x.createdAt)} · ${fmtTime(x.createdAt)}` })))) : null,
-    h('div', { class: 'acts' }, h('button', { class: 'w-btn', type: 'button', text: 'Done', onclick: () => closeOverlay() }), ready ? sendNow : null)));
+    h('header', { class: 'rs-head' }, h('h2', { text: 'Send this recording to' }), h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
+    h('p', { class: 'rs-what', text: 'The full transcript and summary go to a new thread when the recording is done.' }),
+    body, error, foot));
 }
+
+// Sending. Standard agents are sent by the Mizel server; the private agent only accepts the owner's own
+// device, so this client sends it through Wizard (same path as Chats).
+async function wizardCall(path, agent, json, headers = {}) {
+  const r = await fetch(`/wizard/hermes${path}?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers }, body: JSON.stringify({ ...json, agent }) });
+  const text = await r.text(); let data = null; try { data = JSON.parse(text); } catch { /* not JSON */ }
+  if (!r.ok) throw Object.assign(new Error(data?.error?.message || data?.error || `Wizard ${r.status}`), { status: r.status, body: text.slice(0, 200) });
+  return data || {};
+}
+async function deviceDeliver(meetingId, agent, { manual = false, label = '' } = {}) {
+  const c = await api('deliveries/claim', { method: 'POST', json: { meetingId, agent, manual, agentLabel: label || agentName(agent) } });
+  try {
+    const id = `wizard_${Date.now()}_${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+    const tag = () => Array.from(crypto.getRandomValues(new Uint8Array(2)), (b) => b.toString(16).padStart(2, '0')).join('');
+    for (const [i, title] of [c.title, `${c.title} · ${tag()}`, `${c.title} · ${tag()}${tag()}`].entries()) {
+      try { await wizardCall('/api/sessions', c.agent, { id, source: 'wizard-mobile', title: title.slice(0, 90) }); break; }
+      catch (e) { if (!/invalid_title|already in use/i.test(`${e.message} ${e.body}`) || i === 2) throw e; }
+    }
+    const run = await wizardCall('/v1/runs', c.agent, { session_id: id, input: c.text }, { 'Idempotency-Key': c.sendId });
+    return await api('deliveries/result', { method: 'POST', json: { sendId: c.sendId, threadId: id, runId: run.run_id || run.id || '' } });
+  } catch (e) {
+    await api('deliveries/result', { method: 'POST', json: { sendId: c.sendId, error: errMsg(e) } }).catch(() => {});
+    throw e;
+  }
+}
+async function deliver(meetingId, agent, { manual = false, label = '', viaDevice = false } = {}) {
+  if (viaDevice) return deviceDeliver(meetingId, agent, { manual, label });
+  return api('send', { method: 'POST', json: { meetingId, agent } });
+}
+let pumping = false;
+async function pumpDeliveries() {
+  if (pumping || document.visibilityState !== 'visible') return;
+  pumping = true;
+  try {
+    const { due = [] } = await api('deliveries/due');
+    for (const d of due) {
+      try { await deviceDeliver(d.meetingId, d.agent); routeCache.delete(d.meetingId); }
+      catch (e) { if (e?.status !== 409) console.warn('Mizel delivery failed', d.meetingId, errMsg(e)); }
+      if (state.current?.id === d.meetingId) void renderRoute(state.current);
+    }
+  } catch { /* offline: next tick */ }
+  finally { pumping = false; }
+}
+void pumpDeliveries();
+setInterval(() => { void pumpDeliveries(); if (state.current && !els.docRoute.hidden) void renderRoute(state.current); }, 15000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void pumpDeliveries(); });
 function openManualAsk(meetingId) {
   let sending = false;
   const input = h('textarea', { class: 'w-input', rows: '4', maxlength: '6000', placeholder: 'Your message to Archimedes…', 'aria-label': 'Message to Archimedes', style: 'width:100%;resize:vertical;margin:12px 0' });
@@ -1947,7 +2058,7 @@ function bind() {
   Object.assign(els, {
     app: $('#app'), home: $('#home-panel'), doc: $('#doc'), docPane: $('#doc-pane'), docScroll: $('#doc-scroll'),
     upcoming: $('#upcoming'), meetings: $('#meetings'), btnNew: $('#btn-new'), btnNewMobile: $('#btn-new-mobile'), listFoot: $('#list-foot'), recBanner: $('#rec-banner'),
-    title: $('#title'), eyebrow: $('#eyebrow'), meta: $('#meta'), docActions: $('#doc-actions'), topStatus: $('#top-status'), saved: $('#saved'), docStatus: $('#doc-status'), docToolbar: $('#doc-toolbar'),
+    title: $('#title'), eyebrow: $('#eyebrow'), meta: $('#meta'), docActions: $('#doc-actions'), docRoute: $('#doc-route'), topStatus: $('#top-status'), saved: $('#saved'), docStatus: $('#doc-status'), docToolbar: $('#doc-toolbar'),
     notepad: $('#notepad'), enhanced: $('#enhanced'), conflict: $('#conflict'), transcriptInline: $('#transcript-inline'), asks: $('#asks'),
     notesView: $('#notes-view'), notesActions: $('#notes-actions'),
     originalSummary: $('#original-live-summary'), originalSummaryBody: $('#original-summary-body'), liveConnection: $('#live-connection'),

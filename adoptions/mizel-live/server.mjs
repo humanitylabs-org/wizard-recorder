@@ -237,8 +237,7 @@ async function resolveAgent(id) {
   return agent;
 }
 function rememberAgent(meetingId, agentId) {
-  state.routes = state.routes || {};
-  if (meetingId) state.routes[meetingId] = agentId;
+  // Asks never change where the finished transcript goes.
   state.lastAgent = agentId;
 }
 async function createAgentThread(agentId, title) {
@@ -251,47 +250,63 @@ async function createAgentThread(agentId, title) {
   return id;
 }
 
-// ───────────── Finished recordings go to the chosen agent automatically ─────────────
-async function finishRouteFor(mid) {
-  if (state.routes?.[mid]) return state.routes[mid];
-  return state.finish?.default || 'none';
+// ───────────── Finished recordings go to an agent automatically ─────────────
+// Default is always the private agent. A pick on one recording changes only that recording.
+const DEFAULT_AGENT = process.env.MIZEL_DEFAULT_AGENT || 'private';
+const MEETING_ID = /^[A-Za-z0-9_-]{3,64}$/;
+if (!state.autoSince) { state.autoSince = new Date().toISOString(); save(); }   // older recordings are never auto-sent
+function finishRouteFor(mid) { return state.routes?.[mid] || DEFAULT_AGENT; }
+async function readSmallJson(req, max) {
+  try { const chunks = []; let bytes = 0; for await (const c of req) { bytes += c.length; if (bytes > max) return null; chunks.push(c); } const v = JSON.parse(Buffer.concat(chunks).toString('utf8')); return v && typeof v === 'object' ? v : null; }
+  catch { return null; }
+}
+const startedCache = new Map();
+async function autoEligible(mid) {
+  if (state.routes?.[mid]) return true;
+  let started = startedCache.get(mid);
+  if (!started) {
+    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(8000) }); if (r.ok) { started = (await r.json()).started_at; startedCache.set(mid, started); } } catch { /* unknown */ }
+  }
+  return !!started && Date.parse(started) >= Date.parse(state.autoSince);
 }
 const FINISH_POLL_MS = Number(process.env.MIZEL_FINISH_POLL_MS || 15000);
 const SUMMARY_WAIT_MS = 5 * 60 * 1000;
 const finishSeen = new Map(); // meetingId → first time seen ready
 async function deliverFinished() {
-  const def = state.finish?.default || 'none';
-  const explicit = Object.entries(state.routes || {}).filter(([, a]) => a && a !== 'none');
-  if (def === 'none' && !explicit.length) return;
   let list;
   try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings?limit=30`, { signal: AbortSignal.timeout(10000) }); if (!r.ok) return; list = (await r.json()).meetings || []; }
   catch { return; }
   state.delivered = state.delivered || {};
   for (const m of list) {
     if (m.status !== 'ready' || m.source !== 'meetings' || state.delivered[m.id]) continue;
-    const explicitRoute = state.routes?.[m.id];
-    const route = explicitRoute || (def !== 'none' && state.finish?.since && Date.parse(m.started_at) >= Date.parse(state.finish.since) ? def : 'none');
-    if (!route || route === 'none') continue;
+    if (!state.routes?.[m.id] && Date.parse(m.started_at) < Date.parse(state.autoSince)) continue;
+    const route = finishRouteFor(m.id);
+    if (route === 'none') continue;
     if (!finishSeen.has(m.id)) finishSeen.set(m.id, Date.now());
     let detail;
     try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(m.id)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) continue; detail = await r.json(); }
     catch { continue; }
     const busy = detail.jobs?.enhance === 'running' || (detail.jobs?.transcribe_pending || 0) > 0;
     if (busy && Date.now() - finishSeen.get(m.id) < SUMMARY_WAIT_MS) continue;   // wait for the full transcript and summary
-    let agent; try { agent = await resolveAgent(route); } catch { continue; }
+    const visible = (await listAgents().catch(() => [])).find((a) => a.id === route);
+    if (!visible) {   // the private agent: only the owner's own device may open it, so the Mizel client sends it
+      if (!state.due?.[m.id]) { state.due = { ...(state.due || {}), [m.id]: { agent: route, at: new Date().toISOString() } }; save(); logEvent('finish.due', { meetingId: m.id, agent: route }); }
+      continue;
+    }
     const tries = (state.finishTries?.[m.id] || 0) + 1;
     state.finishTries = { ...(state.finishTries || {}), [m.id]: tries };
     state.sends = state.sends || {};
-    const send = { id: `send_${crypto.randomUUID()}`, meetingId: m.id, agent: agent.id, agentLabel: agent.label, note: '', auto: true, status: 'sending', createdAt: new Date().toISOString() };
+    const send = { id: `send_${crypto.randomUUID()}`, meetingId: m.id, agent: visible.id, agentLabel: visible.label, note: '', auto: true, status: 'sending', createdAt: new Date().toISOString() };
     state.sends[send.id] = send; save();
-    logEvent('finish.deliver', { sendId: send.id, meetingId: m.id, agent: agent.id, attempt: tries });
+    logEvent('finish.deliver', { sendId: send.id, meetingId: m.id, agent: visible.id, attempt: tries });
     await sendRecording(send);
     if (send.status === 'sent' || tries >= 3) { state.delivered[m.id] = send.id; save(); }
   }
 }
 setInterval(() => void deliverFinished().catch((e) => logEvent('finish.error', { error: String(e?.message || e).slice(0, 200) })), FINISH_POLL_MS).unref();
+
 const publicSend = (x) => ({ id: x.id, meetingId: x.meetingId, agent: x.agent, agentLabel: x.agentLabel, note: x.note || '', status: x.status, error: x.error || null,
-  threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0, auto: !!x.auto });
+  threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0, auto: !!x.auto, via: x.via || 'server' });
 async function sendRecording(send) {
   const mid = send.meetingId;
   try {
@@ -655,26 +670,64 @@ const server = http.createServer(async (req, res) => {
   }
   if (p === '/finish-route' && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId') || '';
-    try {
-      const agents = await listAgents();
-      const sends = Object.values(state.sends || {}).filter((x) => x.meetingId === mid).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10).map(publicSend);
-      const sent = sends.find((x) => x.status === 'sent' && x.auto) || null;
-      return sendRaw(res, 200, JSON.stringify({ agents, route: await finishRouteFor(mid), default: state.finish?.default || 'none', sent, sends }), 'application/json');
-    } catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Agents unavailable: ${String(e.message || e).slice(0, 120)}` }), 'application/json'); }
+    if (!MEETING_ID.test(mid)) return sendRaw(res, 400, JSON.stringify({ error: 'meetingId required' }), 'application/json');
+    const sends = Object.values(state.sends || {}).filter((x) => x.meetingId === mid).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10).map(publicSend);
+    const route = finishRouteFor(mid);
+    const deliveredId = state.delivered?.[mid];
+    const sent = deliveredId ? publicSend(state.sends?.[deliveredId] || {}) : null;
+    return sendRaw(res, 200, JSON.stringify({ route, isDefault: !state.routes?.[mid], default: DEFAULT_AGENT, eligible: await autoEligible(mid), sent: sent?.status === 'sent' ? sent : null, last: sends[0] || null, due: !!state.due?.[mid], sends }), 'application/json');
   }
   if (p === '/finish-route' && req.method === 'POST') {
     if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
-    let msg;
-    try { const chunks = []; let bytes = 0; for await (const c of req) { bytes += c.length; if (bytes > 4000) return sendRaw(res, 413, 'too large'); chunks.push(c); } msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-    catch { return sendRaw(res, 400, 'bad JSON'); }
-    if (!msg || typeof msg.meetingId !== 'string' || !/^[A-Za-z0-9_-]{3,64}$/.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
-    let id = 'none';
-    if (msg.agent !== 'none') { try { id = (await resolveAgent(msg.agent)).id; } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); } }
-    state.routes = state.routes || {}; state.routes[msg.meetingId] = id;
-    const prev = state.finish?.default || 'none';
-    state.finish = { default: id, since: prev === 'none' && id !== 'none' ? new Date().toISOString() : (state.finish?.since || new Date().toISOString()) };
+    const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
+    if (typeof msg.meetingId !== 'string' || !MEETING_ID.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
+    const id = msg.agent === 'none' ? 'none' : String(msg.agent || '');
+    if (id !== 'none' && !validAgentId(id)) return sendRaw(res, 400, JSON.stringify({ error: 'Unknown agent' }), 'application/json');
+    // Only this recording changes. The default (the private agent) never does.
+    state.routes = state.routes || {};
+    if (id === DEFAULT_AGENT) delete state.routes[msg.meetingId]; else state.routes[msg.meetingId] = id;
+    if (state.due?.[msg.meetingId]) state.due[msg.meetingId].agent = id;
     save(); logEvent('finish.route', { meetingId: msg.meetingId, agent: id });
-    return sendRaw(res, 200, JSON.stringify({ route: id, default: id }), 'application/json');
+    return sendRaw(res, 200, JSON.stringify({ route: finishRouteFor(msg.meetingId), isDefault: !state.routes[msg.meetingId], default: DEFAULT_AGENT }), 'application/json');
+  }
+  // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Mizel client.
+  if (p === '/deliveries/due' && req.method === 'GET') {
+    const due = Object.entries(state.due || {}).filter(([mid, d]) => d.agent && d.agent !== 'none' && !state.delivered?.[mid]).map(([mid, d]) => ({ meetingId: mid, agent: d.agent }));
+    return sendRaw(res, 200, JSON.stringify({ due }), 'application/json');
+  }
+  if (p === '/deliveries/claim' && req.method === 'POST') {
+    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
+    if (typeof msg.meetingId !== 'string' || !MEETING_ID.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
+    const mid = msg.meetingId; const manual = msg.manual === true;
+    const agentId = manual ? String(msg.agent || '') : state.due?.[mid]?.agent;
+    if (!agentId || agentId === 'none' || !validAgentId(agentId)) return sendRaw(res, 409, JSON.stringify({ error: 'Nothing to send' }), 'application/json');
+    if (!manual && state.delivered?.[mid]) return sendRaw(res, 409, JSON.stringify({ error: 'Already sent' }), 'application/json');
+    const lease = state.leases?.[mid];
+    if (lease && Date.now() - lease.at < 120000) return sendRaw(res, 409, JSON.stringify({ error: 'Another device is sending it' }), 'application/json');
+    const label = typeof msg.agentLabel === 'string' && msg.agentLabel.trim() ? msg.agentLabel.trim().slice(0, 60) : agentId;
+    let meeting;
+    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) throw new Error(String(r.status)); meeting = await r.json(); }
+    catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Recording unavailable (${e.message})` }), 'application/json'); }
+    const packet = transcriptPacket({ meeting, summary: summaryFor(mid), note: '', agentLabel: label });
+    state.sends = state.sends || {};
+    const send = { id: `send_${crypto.randomUUID()}`, meetingId: mid, agent: agentId, agentLabel: label, note: '', auto: !manual, via: 'device', status: 'sending', createdAt: new Date().toISOString(), segments: packet.segments };
+    state.sends[send.id] = send; state.leases = { ...(state.leases || {}), [mid]: { at: Date.now(), sendId: send.id } }; save();
+    logEvent('device.claim', { sendId: send.id, meetingId: mid, agent: agentId, manual });
+    return sendRaw(res, 200, JSON.stringify({ sendId: send.id, agent: agentId, title: threadTitle(packet.title, label), text: packet.text }), 'application/json');
+  }
+  if (p === '/deliveries/result' && req.method === 'POST') {
+    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
+    const send = state.sends?.[msg.sendId];
+    if (!send || send.via !== 'device' || send.status !== 'sending') return sendRaw(res, 404, 'unknown send');
+    if (state.leases?.[send.meetingId]?.sendId === send.id) delete state.leases[send.meetingId];
+    if (typeof msg.threadId === 'string' && /^[A-Za-z0-9_.:-]{3,120}$/.test(msg.threadId)) {
+      send.threadId = msg.threadId; send.runId = typeof msg.runId === 'string' ? msg.runId.slice(0, 120) : null; send.status = 'sent';
+      state.delivered = { ...(state.delivered || {}), [send.meetingId]: send.id }; if (state.due) delete state.due[send.meetingId];
+    } else { send.status = 'failed'; send.error = `Didn't reach ${send.agentLabel}. ${String(msg.error || '').slice(0, 140)}`; }
+    save(); logEvent('device.result', { sendId: send.id, meetingId: send.meetingId, agent: send.agent, status: send.status });
+    return sendRaw(res, 200, JSON.stringify({ send: publicSend(send) }), 'application/json');
   }
   if (p === '/agents' && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId') || '';
@@ -703,9 +756,10 @@ const server = http.createServer(async (req, res) => {
     try { agent = await resolveAgent(msg.agent); } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); }
     state.sends = state.sends || {};
     const send = { id: `send_${crypto.randomUUID()}`, meetingId: msg.meetingId, agent: agent.id, agentLabel: agent.label, note, status: 'sending', createdAt: new Date().toISOString() };
-    state.sends[send.id] = send; rememberAgent(msg.meetingId, agent.id); save();
+    state.sends[send.id] = send; save();
     logEvent('send.requested', { sendId: send.id, meetingId: send.meetingId, agent: agent.id });
     await sendRecording(send);
+    if (send.status === 'sent') { state.delivered = { ...(state.delivered || {}), [send.meetingId]: send.id }; if (state.due) delete state.due[send.meetingId]; save(); }
     return sendRaw(res, send.status === 'failed' ? 502 : 200, JSON.stringify({ send: publicSend(send) }), 'application/json');
   }
   if (p === '/asks' && req.method === 'GET') {

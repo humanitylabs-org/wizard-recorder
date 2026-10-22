@@ -23,7 +23,7 @@ test('agent ids are strict', () => {
 
 test('packet: note first, memory, notes, timestamped transcript', () => {
   const p = transcriptPacket({
-    meeting: { title: 'Standup', started_at: '2026-10-22T09:00:00+07:00', duration_ms: 600000, notes: 'Ship router', segments: [{ start_ms: 0, text: 'Hello' }, { start_ms: 65000, text: ' Next item ' }, { start_ms: 70000, text: '  ' }] },
+    meeting: { enhanced: { markdown: '# Standup\n- Decided X' }, title: 'Standup', started_at: '2026-10-22T09:00:00+07:00', duration_ms: 600000, notes: 'Ship router', segments: [{ start_ms: 0, text: 'Hello' }, { start_ms: 65000, text: ' Next item ' }, { start_ms: 70000, text: '  ' }] },
     summary: { topics: [{ title: 'Plans', bullets: [{ text: 'Build router', atMs: 65000 }] }] },
     note: 'Pull out action items', agentLabel: 'Quick',
   });
@@ -31,6 +31,7 @@ test('packet: note first, memory, notes, timestamped transcript', () => {
   assert.match(p.text, /# Standup/);
   assert.match(p.text, /- Build router \[01:05\]/);
   assert.match(p.text, /## Notes\n\nShip router/);
+  assert.match(p.text, /## Summary \(Mizel\)\n\n- Decided X/);
   assert.match(p.text, /\[00:00\] Hello\n\[01:05\] Next item/);
   assert.equal(p.segments, 2);
   assert.equal(p.truncated, false);

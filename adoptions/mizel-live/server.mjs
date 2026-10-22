@@ -250,8 +250,48 @@ async function createAgentThread(agentId, title) {
   }
   return id;
 }
+
+// ───────────── Finished recordings go to the chosen agent automatically ─────────────
+async function finishRouteFor(mid) {
+  if (state.routes?.[mid]) return state.routes[mid];
+  return state.finish?.default || 'none';
+}
+const FINISH_POLL_MS = Number(process.env.MIZEL_FINISH_POLL_MS || 15000);
+const SUMMARY_WAIT_MS = 5 * 60 * 1000;
+const finishSeen = new Map(); // meetingId → first time seen ready
+async function deliverFinished() {
+  const def = state.finish?.default || 'none';
+  const explicit = Object.entries(state.routes || {}).filter(([, a]) => a && a !== 'none');
+  if (def === 'none' && !explicit.length) return;
+  let list;
+  try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings?limit=30`, { signal: AbortSignal.timeout(10000) }); if (!r.ok) return; list = (await r.json()).meetings || []; }
+  catch { return; }
+  state.delivered = state.delivered || {};
+  for (const m of list) {
+    if (m.status !== 'ready' || m.source !== 'meetings' || state.delivered[m.id]) continue;
+    const explicitRoute = state.routes?.[m.id];
+    const route = explicitRoute || (def !== 'none' && state.finish?.since && Date.parse(m.started_at) >= Date.parse(state.finish.since) ? def : 'none');
+    if (!route || route === 'none') continue;
+    if (!finishSeen.has(m.id)) finishSeen.set(m.id, Date.now());
+    let detail;
+    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(m.id)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) continue; detail = await r.json(); }
+    catch { continue; }
+    const busy = detail.jobs?.enhance === 'running' || (detail.jobs?.transcribe_pending || 0) > 0;
+    if (busy && Date.now() - finishSeen.get(m.id) < SUMMARY_WAIT_MS) continue;   // wait for the full transcript and summary
+    let agent; try { agent = await resolveAgent(route); } catch { continue; }
+    const tries = (state.finishTries?.[m.id] || 0) + 1;
+    state.finishTries = { ...(state.finishTries || {}), [m.id]: tries };
+    state.sends = state.sends || {};
+    const send = { id: `send_${crypto.randomUUID()}`, meetingId: m.id, agent: agent.id, agentLabel: agent.label, note: '', auto: true, status: 'sending', createdAt: new Date().toISOString() };
+    state.sends[send.id] = send; save();
+    logEvent('finish.deliver', { sendId: send.id, meetingId: m.id, agent: agent.id, attempt: tries });
+    await sendRecording(send);
+    if (send.status === 'sent' || tries >= 3) { state.delivered[m.id] = send.id; save(); }
+  }
+}
+setInterval(() => void deliverFinished().catch((e) => logEvent('finish.error', { error: String(e?.message || e).slice(0, 200) })), FINISH_POLL_MS).unref();
 const publicSend = (x) => ({ id: x.id, meetingId: x.meetingId, agent: x.agent, agentLabel: x.agentLabel, note: x.note || '', status: x.status, error: x.error || null,
-  threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0 });
+  threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0, auto: !!x.auto });
 async function sendRecording(send) {
   const mid = send.meetingId;
   try {
@@ -612,6 +652,29 @@ const server = http.createServer(async (req, res) => {
       void dispatchAsk(ask, 'Manual ask');
     });
     return;
+  }
+  if (p === '/finish-route' && req.method === 'GET') {
+    const mid = url.searchParams.get('meetingId') || '';
+    try {
+      const agents = await listAgents();
+      const sends = Object.values(state.sends || {}).filter((x) => x.meetingId === mid).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10).map(publicSend);
+      const sent = sends.find((x) => x.status === 'sent' && x.auto) || null;
+      return sendRaw(res, 200, JSON.stringify({ agents, route: await finishRouteFor(mid), default: state.finish?.default || 'none', sent, sends }), 'application/json');
+    } catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Agents unavailable: ${String(e.message || e).slice(0, 120)}` }), 'application/json'); }
+  }
+  if (p === '/finish-route' && req.method === 'POST') {
+    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    let msg;
+    try { const chunks = []; let bytes = 0; for await (const c of req) { bytes += c.length; if (bytes > 4000) return sendRaw(res, 413, 'too large'); chunks.push(c); } msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { return sendRaw(res, 400, 'bad JSON'); }
+    if (!msg || typeof msg.meetingId !== 'string' || !/^[A-Za-z0-9_-]{3,64}$/.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
+    let id = 'none';
+    if (msg.agent !== 'none') { try { id = (await resolveAgent(msg.agent)).id; } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); } }
+    state.routes = state.routes || {}; state.routes[msg.meetingId] = id;
+    const prev = state.finish?.default || 'none';
+    state.finish = { default: id, since: prev === 'none' && id !== 'none' ? new Date().toISOString() : (state.finish?.since || new Date().toISOString()) };
+    save(); logEvent('finish.route', { meetingId: msg.meetingId, agent: id });
+    return sendRaw(res, 200, JSON.stringify({ route: id, default: id }), 'application/json');
   }
   if (p === '/agents' && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId') || '';

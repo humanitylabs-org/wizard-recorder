@@ -39,7 +39,7 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
   const title = (meeting?.title || 'Untitled recording').trim();
   const lines = [];
   const ask = String(note || '').trim();
-  lines.push(ask || `Here is a Mizel.ai recording I'm sending you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
+  lines.push(ask || `This Mizel.ai recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
   lines.push('', '---', '', `# ${title}`);
   const meta = [bangkok(meeting?.started_at) && `${bangkok(meeting.started_at)} (Bangkok)`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Mizel.ai'].filter(Boolean);
   lines.push(meta.join(' · '));
@@ -53,6 +53,8 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
       for (const b of t.bullets) lines.push(`- ${String(b.text || '').trim()}${Number.isFinite(b.atMs) ? ` [${stamp(b.atMs)}]` : ''}`);
     }
   }
+  const enhanced = typeof meeting?.enhanced?.markdown === 'string' ? meeting.enhanced.markdown.replace(/[\u0000-\u0008\u000e-\u001f\u2063]/g, '').trim() : '';
+  if (enhanced) lines.push('', '## Summary (Mizel)', '', enhanced.replace(/^# .*\n?/, '').trim());
   const notes = typeof meeting?.notes === 'string' ? meeting.notes.trim() : '';
   if (notes) lines.push('', '## Notes', '', notes);
   const segments = (meeting?.segments || []).filter((s) => s?.text && s.text.trim());

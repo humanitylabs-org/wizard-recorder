@@ -681,3 +681,7 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 .rs-note b { color: var(--w-text-2); font-weight: 600; }
 .rs-send { width: 100%; min-height: 46px; justify-content: center; font-size: 15px; }
 @media (max-width: 760px) { .route-sheet { width: 100%; } }
+
+/* Wizard's agent orb is the New recording button (WizardApp.orb.claim): ours steps aside. */
+html.orb-claimed .rec-fab { display: none !important; }
+@media (max-width: 760px) { html.orb-claimed .side-foot { padding-right: 88px; } }

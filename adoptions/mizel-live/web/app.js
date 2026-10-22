@@ -229,6 +229,7 @@ function applyRoute(route) {
   const prev = state.route;
   state.route = route;
   els.app.dataset.view = route.view === 'archimedes' ? 'meeting' : route.view;
+  syncAppOrb();
   closeOverlay();
   els.archView.hidden = route.view !== 'archimedes';
   if (route.view === 'archimedes') {
@@ -2041,6 +2042,16 @@ function appBack() {
   return false;
 }
 WizardApp.ready({ name: 'Mizel', version: '1' });
+// Wizard's agent orb becomes Mizel's New recording button on the list (two-orb layout); our own button then hides.
+var orbClaimed = null;
+function syncAppOrb() {
+  if (!WizardApp.orb) return;
+  const want = els.app?.dataset.view !== 'meeting';
+  if (want === orbClaimed) return; orbClaimed = want;
+  if (want) WizardApp.orb.claim({ icon: 'plus', label: 'New recording' }, () => { if (!els.btnNewMobile.disabled) newMeeting(); })
+    .then((shown) => document.documentElement.classList.toggle('orb-claimed', shown === true), () => {});
+  else void WizardApp.orb.release().then(() => document.documentElement.classList.remove('orb-claimed'));
+}
 const appCanGoBack = () => !!overlay || !!(els.docActions && $('.w-menu', els.docActions)) || state.drawerOpen || state.route.view !== 'home';
 WizardApp.back.useHistory({ isRoot: () => !appCanGoBack() });
 WizardApp.back.register({ canGoBack: appCanGoBack, back: appBack });

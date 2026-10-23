@@ -60,7 +60,7 @@ def install_routes(app):
 
     @app.get('/healthz')
     async def healthz():
-        return {"ok": True, "app": "mizel", "version": "0.2.0"}
+        return {"ok": True, "app": "wizard-recorder", "version": "0.3.0"}
 
     @app.get('/mcp')
     async def mcp_get():
@@ -87,7 +87,7 @@ def install_routes(app):
         def error(code, message):
             return JSONResponse({'jsonrpc':'2.0','id':ident,'error':{'code':code,'message':message}})
         if method == 'initialize':
-            result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name':'mizel','version':'0.2.0'}}
+            result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name':'wizard-recorder','version':'0.2.0'}}
         elif method == 'ping':
             result = {}
         elif method == 'tools/list':

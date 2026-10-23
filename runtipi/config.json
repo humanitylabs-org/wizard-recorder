@@ -1,17 +1,113 @@
 {
-  "name": "Mizel.ai", "id": "mizel", "wizard_type": "service",
-  "available": true, "short_desc": "Record meetings and search shared-transcriber transcripts.",
-  "author": "Humanity Labs", "port": 8973, "categories": ["utilities"],
+  "name": "Recorder",
+  "id": "wizard-recorder",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Record meetings and search shared-transcriber transcripts.",
+  "author": "Humanity Labs",
+  "port": 8080,
+  "categories": [
+    "utilities"
+  ],
   "description": "Empty-by-default recorder with notes, browser/native capture, audio upload, HTTP API, MCP and shared transcription.",
-  "tipi_version": 1, "version": "0.2.0", "source": "https://github.com/humanitylabs-org/meeting-recorder",
-  "exposable": false, "supported_architectures": ["amd64", "arm64"],
-  "created_at": 1791850000000, "updated_at": 1791850000000,
-  "dynamic_config": true, "min_tipi_version": "4.8.0", "uid": 1000, "gid": 1000,
+  "tipi_version": 1,
+  "version": "0.3.0",
+  "source": "https://github.com/humanitylabs-org/wizard-recorder",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791850000000,
+  "updated_at": 1791850000000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
   "form_fields": [
-    {"type":"text","label":"Shared transcription slot API","env_variable":"TRANSCRIPTION_URL","required":true,"default":"http://transcriber:8000/v1/audio/transcriptions","hint":"Resolve the selected transcription provider from apps.json. Use its container-network endpoint; no model is bundled."},
-    {"type":"text","label":"Shared transcription model","env_variable":"TRANSCRIPTION_MODEL","required":true,"default":"Systran/faster-whisper-small"},
-    {"type":"text","label":"Trusted Wizard origins","env_variable":"MEETINGS_ALLOWED_ORIGINS","required":false,"hint":"Comma-separated exact browser origins for your Wizard shell."},
-    {"type":"text","label":"Trusted Wizard hostnames","env_variable":"MEETINGS_ALLOWED_HOSTS","required":false,"hint":"Comma-separated Host headers forwarded by your installed Wizard shell."},
-    {"type":"text","label":"Timezone","env_variable":"MEETINGS_TIMEZONE","required":true,"default":"UTC"}
-  ], "no_gui": false
+    {
+      "type": "text",
+      "label": "Shared transcription slot API",
+      "env_variable": "TRANSCRIPTION_URL",
+      "required": true,
+      "default": "http://transcriber:8000/v1/audio/transcriptions",
+      "hint": "Resolve the selected transcription provider from apps.json. Use its container-network endpoint; no model is bundled."
+    },
+    {
+      "type": "text",
+      "label": "Shared transcription model",
+      "env_variable": "TRANSCRIPTION_MODEL",
+      "required": true,
+      "default": "Systran/faster-whisper-small"
+    },
+    {
+      "type": "text",
+      "label": "Trusted Wizard origins",
+      "env_variable": "MEETINGS_ALLOWED_ORIGINS",
+      "required": false,
+      "hint": "Comma-separated exact browser origins for your Wizard shell."
+    },
+    {
+      "type": "text",
+      "label": "Timezone",
+      "env_variable": "MEETINGS_TIMEZONE",
+      "required": true,
+      "default": "UTC"
+    },
+    {
+      "type": "password",
+      "label": "Optional Tinfoil realtime API key",
+      "env_variable": "TINFOIL_API_KEY",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Optional Connection Router URL",
+      "env_variable": "WIZARD_ROUTER_URL",
+      "required": false
+    },
+    {
+      "type": "password",
+      "label": "Optional app-scoped Router grant",
+      "env_variable": "WIZARD_ROUTER_GRANT",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Optional OpenAI-compatible chat endpoint",
+      "env_variable": "MEETINGS_LLM_URL",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Optional notes model",
+      "env_variable": "MEETINGS_LLM_MODEL",
+      "required": false
+    },
+    {
+      "type": "password",
+      "label": "Optional notes API key",
+      "env_variable": "MEETINGS_LLM_KEY",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Optional app binding delivery URL",
+      "env_variable": "WIZARD_DELIVERY_URL",
+      "required": false
+    },
+    {
+      "type": "password",
+      "label": "Optional app binding delivery token",
+      "env_variable": "WIZARD_DELIVERY_TOKEN",
+      "required": false
+    },
+    {
+      "type": "text",
+      "label": "Optional orb events: set 1 to enable",
+      "env_variable": "RECORDER_ORB_EVENTS",
+      "required": false
+    }
+  ],
+  "no_gui": false
 }

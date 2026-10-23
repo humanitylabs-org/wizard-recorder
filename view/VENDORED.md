@@ -1,0 +1,1 @@
+WizardApp core files are vendored from humanitylabs-org/wizard-ux, revision 3ff02dc910e065f1d7b89a37e10327b7174b13f1. GPL-3.0-only. Hosted apps use the shell resource; standalone uses the same core. Recorder changes: native capture app IDs use wizard-recorder; the optional second-Back tab exit is disabled.

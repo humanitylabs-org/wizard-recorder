@@ -37,7 +37,7 @@ def run_test(tmp_path, fn):
 
 def test_empty_and_scope(tmp_path):
     async def test(s,c):
-        assert (await c.get('/healthz')).json()['app']=='mizel'
+        assert (await c.get('/healthz')).json()['app']=='wizard-recorder'
         assert (await c.get('/api/meetings')).json()=={'meetings':[]}
         assert (await c.get('/api/calendar')).json()['events']==[]
         assert (await c.get('/api/meetings?limit=-1')).status_code==400
@@ -103,9 +103,12 @@ def test_transcription_contract_and_errors(tmp_path):
             return httpx.Response(200,json={'text':'fixture-only result'})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as stt:
             assert await s.stt(stt,wav_bytes())=='fixture-only result'
-            assert b'name="mode"' in seen[0] and b'meeting' in seen[0]
+            assert b'name="model"' in seen[0] and b'Systran/faster-whisper-small' in seen[0]
+            assert b'name="response_format"' in seen[0] and b'json' in seen[0]
+            assert b'name="mode"' not in seen[0]
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req:httpx.Response(422,json={'detail':'invalid model'}))) as stt:
-            assert await s.stt(stt,wav_bytes()) == ''
+            with pytest.raises(httpx.HTTPStatusError):
+                await s.stt(stt,wav_bytes())
         assert (await c.post('/api/uploads',content=b'not audio')).status_code==415
         assert (await c.get('/api/meetings')).json()['meetings']==[]
     run_test(tmp_path,test)
@@ -113,7 +116,7 @@ def test_transcription_contract_and_errors(tmp_path):
 
 def test_recap_goes_to_bound_agent_and_waits_when_down(tmp_path, monkeypatch):
     import agent_delivery
-    monkeypatch.setenv('WIZARD_DELIVERY_URL', 'http://wizard/wizard/v1/apps/meeting-recorder/deliveries')
+    monkeypatch.setenv('WIZARD_DELIVERY_URL', 'http://wizard/wizard/v1/apps/wizard-recorder/deliveries')
     monkeypatch.setenv('WIZARD_DELIVERY_TOKEN', 'app-token-0123456789abcdefghijkl')
     seen, up = [], {'ok': False}
     def handler(request):

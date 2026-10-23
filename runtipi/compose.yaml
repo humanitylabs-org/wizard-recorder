@@ -1,25 +1,28 @@
 services:
-  mizel:
-    image: ghcr.io/humanitylabs-org/meeting-recorder:0.2.0
+  wizard-recorder:
+    image: ghcr.io/humanitylabs-org/wizard-recorder:0.3.0
     user: 1000:1000
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256
-    mem_limit: 512m
+    mem_limit: 768m
     tmpfs: [/tmp]
     environment:
       MEETINGS_DATA: /data
-      TRANSCRIPTION_URL: ${TRANSCRIPTION_URL}
-      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL}
+      TRANSCRIPTION_URL: ${TRANSCRIPTION_URL:-http://transcriber:8000/v1/audio/transcriptions}
+      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}
       MEETINGS_ALLOWED_ORIGINS: ${MEETINGS_ALLOWED_ORIGINS:-}
-      MEETINGS_ALLOWED_HOSTS: ${MEETINGS_ALLOWED_HOSTS:-}
       MEETINGS_TIMEZONE: ${MEETINGS_TIMEZONE:-UTC}
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      WIZARD_ROUTER_URL: ${WIZARD_ROUTER_URL:-}
+      WIZARD_ROUTER_GRANT: ${WIZARD_ROUTER_GRANT:-}
       MEETINGS_LLM_URL: ${MEETINGS_LLM_URL:-}
       MEETINGS_LLM_MODEL: ${MEETINGS_LLM_MODEL:-}
       MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
       WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
       WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
+      RECORDER_ORB_EVENTS: ${RECORDER_ORB_EVENTS:-0}
     volumes:
       - ${APP_DATA_DIR}/data:/data
     healthcheck:
@@ -27,6 +30,7 @@ services:
       interval: 20s
       timeout: 5s
       retries: 3
+      start_period: 20s
     x-runtipi:
       is_main: true
       internal_port: 8080

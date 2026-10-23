@@ -1,4 +1,4 @@
-"""Mizel.ai recorder: live recorder behavior with portable storage and MCP.
+"""Recorder recorder: live recorder behavior with portable storage and MCP.
 
 Owner integrations are explicit environment configuration. Fresh installs are empty.
 Derived from live recorder e4c46d1 + cf610d3; native chunk/stop contracts retained.
@@ -24,21 +24,20 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+from model_client import model_configured, model_run
+from migrate_data import resolve_audio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
-BASE = "/meetings"
-HOME = Path.home()
+BASE = "/wizard-recorder"
 DATA = Path(os.environ.get("MEETINGS_DATA_DIR", os.environ.get("MEETINGS_DATA", "/data")))
 WEB = Path(os.environ.get("MEETINGS_WEB_DIR", Path(__file__).resolve().parent.parent / "web"))
-STT_URL = os.environ.get("MEETINGS_STT_URL", os.environ.get("TRANSCRIPTION_URL", ""))
+STT_URL = os.environ.get("TRANSCRIPTION_URL", "http://transcriber:8000/v1/audio/transcriptions")
 LLM_URL = os.environ.get("MEETINGS_LLM_URL", "")
-LLM_MODEL = os.environ.get("MEETINGS_LLM_MODEL", "glm-5-3")
-LLM_FAST_MODEL = os.environ.get("MEETINGS_LLM_FAST_MODEL", "glm-5-3-flash")
-MIZEL_EXPORTS = Path(os.environ.get("MEETINGS_MIZEL_EXPORTS", DATA / "imports/mizel"))
-ANARLOG_MEETINGS = Path(os.environ.get("MEETINGS_ANARLOG_DIR", DATA / "imports/anarlog"))
+LLM_MODEL = os.environ.get("MEETINGS_LLM_MODEL", "")
+LLM_FAST_MODEL = os.environ.get("MEETINGS_LLM_FAST_MODEL", LLM_MODEL)
 CALENDAR_ACCOUNT = os.environ.get("MEETINGS_CALENDAR_ACCOUNT", "")
 CALENDAR_ID = os.environ.get("MEETINGS_CALENDAR_ID", "")
 USER_MARK = "\u2063"
@@ -51,7 +50,7 @@ SOURCE_LABEL = {"me": "Me", "them": "Them", "mixed": "Speaker"}
 
 
 def _llm_key() -> str:
-    return os.environ.get("MEETINGS_LLM_KEY", os.environ.get("TINFOIL_API_KEY", ""))
+    return os.environ.get("MEETINGS_LLM_KEY", "")
 
 
 def now_iso() -> str:
@@ -148,137 +147,6 @@ def reindex(c: sqlite3.Connection, meeting_id: str) -> None:
     body = "\n".join([m["title"], m["notes"] or "", enh, m["import_summary"] or "", segs])
     c.execute("DELETE FROM search WHERE meeting_id=?", (meeting_id,))
     c.execute("INSERT INTO search(meeting_id, body) VALUES (?, ?)", (meeting_id, body))
-
-
-# ---------------------------------------------------------------- imports
-
-TS_LINE = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\]\s*(.*)$")
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    if not text.startswith("---\n"):
-        return {}, text
-    end = text.find("\n---", 4)
-    if end < 0:
-        return {}, text
-    meta: dict[str, str] = {}
-    for line in text[4:end].splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            meta[k.strip()] = v.strip().strip('"')
-    return meta, text[end + 4:].lstrip("\n")
-
-
-def import_mizel(c: sqlite3.Connection) -> int:
-    added = 0
-    if not MIZEL_EXPORTS.is_dir():
-        return 0
-    for f in sorted(MIZEL_EXPORTS.glob("*.md")):
-        st = f.stat()
-        key = f"mizel:{f.name}"
-        row = c.execute("SELECT id, updated_at FROM meetings WHERE import_key=?", (key,)).fetchone()
-        stamp = str(int(st.st_mtime))
-        if row and row["updated_at"] == stamp:
-            continue
-        meta, body = _parse_frontmatter(f.read_text(errors="replace"))
-        segs: list[tuple[int, str]] = []
-        for line in body.splitlines():
-            m = TS_LINE.match(line.strip())
-            if m:
-                h, mi, s, t = m.groups()
-                segs.append(((int(h) * 3600 + int(mi) * 60 + int(s)) * 1000, t))
-        started = meta.get("recorded_at") or now_iso()
-        try:
-            started_dt = datetime.fromisoformat(started).astimezone(BKK)
-        except ValueError:
-            started_dt = datetime.now(BKK)
-        title = f"Recording · {started_dt:%a %d %b %H:%M}"
-        duration = (segs[-1][0] + 5000) if segs else 0
-        mid = row["id"] if row else "mz_" + hashlib.sha1(key.encode()).hexdigest()[:12]
-        if row:
-            c.execute("DELETE FROM segments WHERE meeting_id=?", (mid,))
-            c.execute("DELETE FROM tx_window WHERE meeting_id=?", (mid,))
-            c.execute("UPDATE meetings SET duration_ms=?, updated_at=? WHERE id=?", (duration, stamp, mid))
-        else:
-            c.execute(
-                "INSERT INTO meetings(id,title,source,status,started_at,duration_ms,import_key,created_at,updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
-                (mid, title, "mizel", "ready", started_dt.isoformat(timespec="seconds"), duration, key, now_iso(), stamp),
-            )
-            added += 1
-        c.executemany(
-            "INSERT INTO segments(id,meeting_id,source,start_ms,end_ms,text,ord) VALUES (?,?,?,?,?,?,?)",
-            [(f"{mid}_{i}", mid, "mixed", ms, ms + 5000, t, i) for i, (ms, t) in enumerate(segs)],
-        )
-        reindex(c, mid)
-    return added
-
-
-def import_anarlog(c: sqlite3.Connection) -> int:
-    added = 0
-    if not ANARLOG_MEETINGS.is_dir():
-        return 0
-    for f in sorted(ANARLOG_MEETINGS.glob("*.md")):
-        key = f"anarlog:{f.name}"
-        stamp = str(int(f.stat().st_mtime))
-        row = c.execute("SELECT id, updated_at FROM meetings WHERE import_key=?", (key,)).fetchone()
-        if row and row["updated_at"] == stamp:
-            continue
-        meta, body = _parse_frontmatter(f.read_text(errors="replace"))
-        title_m = re.search(r"^# (.+)$", body, re.M)
-        title = title_m.group(1).strip() if title_m else "Anarlog meeting"
-        try:
-            started = datetime.fromisoformat(meta.get("created_at", "").replace("Z", "+00:00")).astimezone(BKK)
-        except ValueError:
-            started = datetime.now(BKK)
-        sections = re.split(r"^## ", body, flags=re.M)
-        notes = summary = transcript = ""
-        for sec in sections:
-            head, _, rest = sec.partition("\n")
-            h = head.strip().lower()
-            if h.startswith("meeting note"):
-                notes = re.sub(r"\n{3,}", "\n\n", rest).strip()
-            elif h.startswith("summar"):
-                summary = rest.strip()
-            elif h.startswith("transcript"):
-                transcript = rest.strip()
-        segs = []
-        for i, line in enumerate(l for l in transcript.splitlines() if l.strip()):
-            m = TS_LINE.match(line.strip())
-            if m:
-                h_, mi, s, t = m.groups()
-                ms = (int(h_) * 3600 + int(mi) * 60 + int(s)) * 1000
-            else:
-                ms, t = i * 5000, line.strip()
-            segs.append((ms, t))
-        mid = row["id"] if row else "an_" + hashlib.sha1(key.encode()).hexdigest()[:12]
-        duration = (segs[-1][0] + 5000) if segs else 0
-        if row:
-            c.execute("DELETE FROM segments WHERE meeting_id=?", (mid,))
-            c.execute("DELETE FROM tx_window WHERE meeting_id=?", (mid,))
-            c.execute("UPDATE meetings SET title=?, notes=?, import_summary=?, duration_ms=?, updated_at=? WHERE id=?",
-                      (title, notes, summary, duration, stamp, mid))
-        else:
-            c.execute(
-                "INSERT INTO meetings(id,title,source,status,started_at,duration_ms,notes,import_key,import_summary,created_at,updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (mid, title, "anarlog", "ready", started.isoformat(timespec="seconds"), duration, notes, key, summary, now_iso(), stamp),
-            )
-            added += 1
-        c.executemany(
-            "INSERT INTO segments(id,meeting_id,source,start_ms,end_ms,text,ord) VALUES (?,?,?,?,?,?,?)",
-            [(f"{mid}_{i}", mid, "mixed", ms, ms + 5000, t, i) for i, (ms, t) in enumerate(segs)],
-        )
-        reindex(c, mid)
-    return added
-
-
-def run_imports() -> None:
-    with closing(db()) as c:
-        a = import_mizel(c)
-        b = import_anarlog(c)
-    if a or b:
-        log.info("imported mizel=%s anarlog=%s", a, b)
 
 
 # ---------------------------------------------------------------- calendar
@@ -397,25 +265,7 @@ def meeting_detail(c: sqlite3.Connection, mid: str) -> dict[str, Any]:
 
 async def llm(messages: list[dict[str, str]], *, model: str | None = None, max_tokens: int = 3000,
               timeout: float = 180) -> str:
-    """Call the private LLM. Reasoning models can spend the whole budget thinking and return
-    empty content (finish_reason=length); retry once with a larger budget and low effort,
-    and raise rather than ever returning an empty answer."""
-    budget = max_tokens + 6000
-    for attempt in range(2):
-        async with httpx.AsyncClient(timeout=timeout + 60 * attempt) as client:
-            r = await client.post(LLM_URL, headers={"Authorization": f"Bearer {_llm_key()}"}, json={
-                "model": model or LLM_MODEL, "messages": messages, "max_tokens": budget, "temperature": 0.2,
-                "reasoning_effort": "low",
-            })
-            r.raise_for_status()
-            data = r.json()
-        ch = data["choices"][0]
-        text = re.sub(r"<think>.*?</think>", "", ch["message"].get("content") or "", flags=re.S).strip()
-        if text:
-            return text
-        log.warning("llm returned empty content (finish=%s, usage=%s); retrying", ch.get("finish_reason"), data.get("usage"))
-        budget *= 2
-    raise RuntimeError("the private model returned no answer (it ran out of thinking budget); try again")
+    return await model_run(messages, feature="recap", max_tokens=max_tokens, timeout=timeout)
 
 
 def fmt_ms(ms: int) -> str:
@@ -588,9 +438,8 @@ class NoSpeech(Exception):
 async def stt(client: httpx.AsyncClient, data: bytes, depth: int = 0, prompt: str = "") -> str:
     try:
         r = await client.post(STT_URL, files={"file": ("chunk.wav", data, "audio/wav")},
-                              data={"mode": "meeting", **({"prompt": prompt} if prompt else {})})
-        if r.status_code == 422:
-            return ""
+                              data={"model": os.environ.get("TRANSCRIPTION_MODEL", "Systran/faster-whisper-small"),
+                                    "response_format": "json", **({"prompt": prompt} if prompt else {})})
         if r.status_code == 502 and "no transcript" in r.text:
             return ""
         r.raise_for_status()
@@ -614,7 +463,7 @@ WINDOW_TARGET_MS = 30_000      # transcribe once this much audio is waiting…
 WINDOW_MIN_CUT_MS = 18_000     # …cutting at the quietest point between 18 s and 30 s
 WINDOW_IDLE_S = 12.0           # or when no new chunk has arrived for this long (pause)
 WINDOW_PROMPT = ("Verbatim transcript of a recorded conversation. The speaker sometimes addresses an AI "
-                 "assistant named Archimedes; transcribe those words exactly and never answer them.")
+                 "assistant named the assistant; transcribe those words exactly and never answer them.")
 
 
 def _quietest_cut(pcm: bytes, lo_ms: int, hi_ms: int) -> int:
@@ -638,7 +487,7 @@ def _wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 
 
 def _pcm_of(path: str) -> tuple[bytes, int]:
-    with wave.open(path) as w:
+    with wave.open(str(resolve_audio(DATA, path))) as w:
         if w.getnchannels() != 1 or w.getsampwidth() != 2:
             raise RuntimeError("unexpected chunk format")
         return w.readframes(w.getnframes()), w.getframerate()
@@ -668,7 +517,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
                 run.append(k)
             pcm = b""; rate = 16000; skip = 0
             for i, k in enumerate(run):
-                data, rate = _pcm_of(k["path"])
+                data, rate = _pcm_of(str(resolve_audio(DATA, k["path"])))
                 if i == 0 and k["start_ms"] < cursor_ms < k["start_ms"] + k["duration_ms"]:
                     skip = (cursor_ms - k["start_ms"]) * rate // 1000 * 2
                     data = data[skip:]
@@ -676,7 +525,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
             if rate != 16000:
                 continue
             total_ms = len(pcm) // 32
-            last_arrival = max(os.path.getmtime(k["path"]) for k in run)
+            last_arrival = max(resolve_audio(DATA, k["path"]).stat().st_mtime for k in run)
             flushing = g["status"] != "recording" or (now - last_arrival) > WINDOW_IDLE_S or len(run) < len(chunks)
             if total_ms < WINDOW_TARGET_MS and not flushing:
                 continue
@@ -744,7 +593,7 @@ async def transcription_worker(stop: asyncio.Event) -> None:
                 continue
             key = (job["meeting_id"], job["source"], job["seq"])
             try:
-                text = await stt(client, Path(job["path"]).read_bytes())
+                text = await stt(client, resolve_audio(DATA, job["path"]).read_bytes())
                 with closing(db()) as c:
                     if text:
                         c.execute(
@@ -823,7 +672,7 @@ async def maybe_finalize() -> None:
             reindex(c, r["id"])
             has = c.execute("SELECT notes<>'' OR EXISTS(SELECT 1 FROM segments WHERE meeting_id=?) FROM meetings WHERE id=?",
                             (r["id"], r["id"])).fetchone()[0]
-            if has:
+            if has and model_configured():
                 c.execute("UPDATE meetings SET enhance_state='running' WHERE id=?", (r["id"],))
                 start_bg(run_enhance(r["id"], "general"))
 
@@ -839,7 +688,7 @@ def start_bg(coro) -> None:
 
 # ---------------------------------------------------------------- app
 
-app = FastAPI(title="Meetings", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Recorder", docs_url=None, redoc_url=None, openapi_url=None)
 _stop = asyncio.Event()
 
 
@@ -851,17 +700,15 @@ async def _startup() -> None:
         c.execute("UPDATE chunks SET state='pending' WHERE state='running'")
         c.execute("UPDATE meetings SET enhance_state='idle' WHERE enhance_state='running'")
     start_bg(transcription_worker(_stop))
-    start_bg(_import_loop())
+    start_bg(_maintenance_loop())
 
 
-async def _import_loop() -> None:
-    await asyncio.to_thread(run_imports)
+async def _maintenance_loop() -> None:
     await asyncio.to_thread(finish_stale_recordings)
     while not _stop.is_set():
         try:
             await asyncio.wait_for(_stop.wait(), 300)
         except asyncio.TimeoutError:
-            await asyncio.to_thread(run_imports)
             await asyncio.to_thread(finish_stale_recordings)
 
 
@@ -1162,6 +1009,8 @@ async def meeting_audio(mid: str, request: Request):
 
 @app.post("/api/meetings/{mid}/enhance")
 async def enhance(mid: str, request: Request):
+    if not model_configured():
+        raise HTTPException(503, "Summaries are not configured")
     body = await request.json() if (await request.body()) else {}
     template = body.get("template") if body.get("template") in TEMPLATES else "general"
     with closing(db()) as c:
@@ -1174,7 +1023,7 @@ async def enhance(mid: str, request: Request):
 
 @app.post("/api/meetings/{mid}/ask")
 async def ask_meeting(mid: str, request: Request):
-    if not LLM_URL:
+    if not model_configured():
         raise HTTPException(503, "Notes provider is not configured")
     body = await request.json()
     q = str(body.get("question", "")).strip()[:2000]
@@ -1190,7 +1039,7 @@ async def ask_meeting(mid: str, request: Request):
 
 @app.post("/api/ask")
 async def ask_everything(request: Request):
-    if not LLM_URL:
+    if not model_configured():
         raise HTTPException(503, "Notes provider is not configured")
     body = await request.json()
     q = str(body.get("question", "")).strip()[:2000]
@@ -1236,17 +1085,14 @@ async def delete_meeting(mid: str):
 # ---------------------------------------------------------------- static
 
 from package_routes import install_routes
+from optional_routes import install_optional
 install_routes(app)
+install_optional(app)
 
 
 @app.get("/")
 async def index(request: Request):
-    raw = request.scope.get("raw_path", b"").decode()
-    # The old Meetings view is retired: Mizel.ai has one view, Mizel Live (/mizel-live/). Its hash routes
-    # (#/m/<id>) match, and the browser carries the hash across the redirect. This server stays the API.
-    if not os.environ.get("MEETINGS_EXTERNAL_VIEW"):
-        return JSONResponse({"app":"mizel", "api":"/api", "mcp":"/mcp", "view":"Use the installed Mizel Live view or native recorder."})
-    return RedirectResponse(os.environ["MEETINGS_EXTERNAL_VIEW"], status_code=302)
+    return {"app":"wizard-recorder", "api":"/api", "mcp":"/wizard-recorder/mcp"}
 
 
 @app.get("/{name}")

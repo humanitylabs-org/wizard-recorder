@@ -5,6 +5,8 @@ name: Mizel.ai
 type: service
 category: app
 tags: [audio, meetings, notes]
+privacy: private
+# James, 23 Oct 2026: "The whole point of Mizel was to be fully private so no public agent can read its transcripts."
 version: 0.2.0
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png

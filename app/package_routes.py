@@ -22,7 +22,7 @@ TOOLS = [
     tool("search_meetings", "Search titles, notes and transcript text in this app only.", {"query": {"type": "string", "minLength": 1, "maxLength": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, ["query"]),
     tool("start_recording", "Create a recording session. Device capture starts when the owner presses Record in the view; this tool never silently opens a microphone.", {"title": {"type": "string", "maxLength": 160}}),
     tool("stop_recording", "Request an active device to stop and flush audio. Await awaiting_device_ack until status becomes processing/ready; sessions without an active device finalize immediately.", {"id": ID}, ["id"]),
-    tool("get_transcript", "Read timestamped transcript segments and text for one meeting.", {"id": ID}, ["id"]),
+    tool("get_transcript", "Read full untruncated transcript in segment pages. Follow next_offset until has_more=false. Defaults offset=0, limit=100; max limit=200. No segment text is shortened.", {"id": ID, "offset": {"type":"integer", "minimum":0, "maximum":2147483647}, "limit": {"type":"integer", "minimum":1, "maximum":200}}, ["id"]),
 ]
 
 
@@ -60,7 +60,7 @@ def install_routes(app):
 
     @app.get('/healthz')
     async def healthz():
-        return {"ok": True, "app": "meeting-recorder", "version": "0.1.0"}
+        return {"ok": True, "app": "mizel", "version": "0.2.0"}
 
     @app.get('/mcp')
     async def mcp_get():
@@ -87,7 +87,7 @@ def install_routes(app):
         def error(code, message):
             return JSONResponse({'jsonrpc':'2.0','id':ident,'error':{'code':code,'message':message}})
         if method == 'initialize':
-            result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name':'meeting-recorder','version':'0.1.0'}}
+            result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name':'mizel','version':'0.2.0'}}
         elif method == 'ping':
             result = {}
         elif method == 'tools/list':
@@ -110,7 +110,14 @@ def install_routes(app):
                 elif name in ('get_meeting','get_transcript'):
                     value = await call_api('GET', '/api/meetings/'+arguments['id'])
                     if name == 'get_transcript':
-                        value = {"id": value['id'], "status": value['status'], "segments": value['segments'], "text": '\n'.join(s['text'] for s in value['segments'])}
+                        offset, limit = arguments.get('offset', 0), arguments.get('limit', 100)
+                        total = len(value['segments'])
+                        page = value['segments'][offset:offset + limit]
+                        more = offset + len(page) < total
+                        value = {"id": value['id'], "status": value['status'], "segments": page,
+                                 "offset":offset, "limit":limit, "total_segments":total,
+                                 "has_more":more, "next_offset":offset + len(page) if more else None,
+                                 "text": '\n'.join(s['text'] for s in page)}
                 elif name == 'start_recording':
                     value = await call_api('POST', '/api/meetings', json={'title':arguments.get('title','')})
                     value['capture'] = 'awaiting_device'

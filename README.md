@@ -33,7 +33,7 @@ docker run --name wizard-recorder --network wizard-apps -p 8080:8080 \
   -v "$PWD/recorder-data:/data" \
   -e TRANSCRIPTION_URL=http://transcriber:8000/v1/audio/transcriptions \
   -e TRANSCRIPTION_MODEL=Systran/faster-whisper-small \
-  ghcr.io/humanitylabs-org/wizard-recorder:0.3.1
+  ghcr.io/humanitylabs-org/wizard-recorder:0.3.2
 ```
 
 The existing shared transcriber must be reachable on that Docker network. Its

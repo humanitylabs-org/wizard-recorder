@@ -20,8 +20,6 @@ jobs:
     timeout-minutes: 100
     env:
       DOCKER_CONTEXT: colima-wizard-agents
-      UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
-      UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-python
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+          export UV_CACHE_DIR="$RUNNER_TEMP/uv-cache" UV_PYTHON_INSTALL_DIR="$RUNNER_TEMP/uv-python"
           mkdir -p "$RUNNER_TEMP/evidence"
           uv venv "$RUNNER_TEMP/recorder-venv" --python 3.12
           uv pip install --python "$RUNNER_TEMP/recorder-venv/bin/python" -r app/requirements.txt pytest

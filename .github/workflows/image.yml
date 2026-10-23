@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       confirm_version:
-        description: Repeat the new write-once version (0.3.2)
+        description: Repeat the new write-once version (0.3.3)
         required: true
         type: string
 permissions:
@@ -31,7 +31,7 @@ jobs:
           CONFIRM_VERSION: ${{ inputs.confirm_version }}
         run: |
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
-          test "$CONFIRM_VERSION" = "0.3.2"
+          test "$CONFIRM_VERSION" = "0.3.3"
       - name: Verify isolated source
         shell: bash
         run: |
@@ -70,7 +70,7 @@ jobs:
           docker buildx build --platform linux/arm64,linux/amd64 --provenance=false --push -f app/Dockerfile \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             --metadata-file "$RUNNER_TEMP/evidence/build-metadata.json" \
-            -t ghcr.io/humanitylabs-org/wizard-recorder:0.3.2 \
+            -t ghcr.io/humanitylabs-org/wizard-recorder:0.3.3 \
             -t ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" . 2>&1 | tee "$RUNNER_TEMP/evidence/image-build.log"
           docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" | tee "$RUNNER_TEMP/evidence/image-manifest.log"
           GH_TOKEN="$GHCR_TOKEN" gh api orgs/humanitylabs-org/packages/container/wizard-recorder --jq '{name,visibility,repository:.repository.full_name}' | tee "$RUNNER_TEMP/evidence/package-privacy.json"
@@ -78,7 +78,13 @@ jobs:
           digest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/build-metadata.json"))["containerimage.digest"])')
           image="ghcr.io/humanitylabs-org/wizard-recorder@$digest"
           docker pull "$image"
-          python3 qa/clean-install.py --image "$image" --root "$RUNNER_TEMP/clean-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" 2>&1 | tee "$RUNNER_TEMP/evidence/e2e.log"
+          # Bind mounts must sit under the Colima VM's shared mount, or the data never reaches the host.
+          qa_parent=/Volumes/ThalesMedia/agents/wizard-recorder-qa
+          root="$qa_parent/clean-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          keep="$RUNNER_TEMP/clean-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$qa_parent" "$keep"
+          trap 'cp -R "$root/evidence" "$keep/" 2>/dev/null || true' EXIT
+          python3 qa/clean-install.py --image "$image" --root "$root" 2>&1 | tee "$RUNNER_TEMP/evidence/e2e.log"
       - name: Retain proof
         if: always()
         uses: actions/upload-artifact@v4

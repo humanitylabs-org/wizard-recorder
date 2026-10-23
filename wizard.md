@@ -6,7 +6,7 @@ type: service
 category: app
 tags: [audio, meetings, notes]
 privacy: private
-version: 0.3.2
+version: 0.3.3
 summary: Record, upload, play back and search audio transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only

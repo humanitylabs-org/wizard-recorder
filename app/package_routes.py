@@ -60,7 +60,7 @@ def install_routes(app):
 
     @app.get('/healthz')
     async def healthz():
-        return {"ok": True, "app": "wizard-recorder", "version": "0.3.2"}
+        return {"ok": True, "app": "wizard-recorder", "version": "0.3.3"}
 
     @app.get('/mcp')
     async def mcp_get():

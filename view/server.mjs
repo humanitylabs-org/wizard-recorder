@@ -235,7 +235,7 @@ export const server=http.createServer(async(req,res)=>{
     if(p.startsWith(BASE+'/'))p=p.slice(BASE.length);
     if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!safeOrigin(req))return send(res,403,{error:'Cross-origin writes are not allowed'});
     if(p==='/capabilities.js')return send(res,200,'window.RecorderCapabilities='+JSON.stringify(caps)+';','text/javascript');
-    if(p==='/live-health')return send(res,200,{ok:true,build:'0.3.2',...caps});
+    if(p==='/live-health')return send(res,200,{ok:true,build:'0.3.3',...caps});
     if(p==='/asks')return send(res,200,{asks:[]});
     if(p==='/summary')return proxy(req,res,'/api/live-summary'+url.search);
     if(p==='/orb-events'){

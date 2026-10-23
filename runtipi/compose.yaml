@@ -1,6 +1,6 @@
 services:
   wizard-recorder:
-    image: ghcr.io/humanitylabs-org/wizard-recorder:0.3.2
+    image: ghcr.io/humanitylabs-org/wizard-recorder:0.3.3
     user: 1000:1000
     read_only: true
     cap_drop: [ALL]

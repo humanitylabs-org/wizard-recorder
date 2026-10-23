@@ -908,6 +908,9 @@ const summaryStore = {
     finally { this.loading.delete(id); if (state.current?.id === id) { if (state.docMode === 'live-summary') renderSummary(); if (state.docMode === 'transcript') renderOriginalSummary(); } }
   },
 };
+if(CAP.summaries)setInterval(()=>{
+  if(!document.hidden && state.current?.status==='recording')void summaryStore.load(state.current.id);
+},10000);
 // Expansion belongs to the viewer, never the generated summary. Only explicit
 // choices persist: the newest untouched topic opens; older untouched topics close.
 const summaryExpansion = new Map();

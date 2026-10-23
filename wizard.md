@@ -4,6 +4,7 @@ id: mizel
 name: Mizel.ai
 type: service
 category: app
+voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, meetings, notes]
 privacy: private
 # James, 23 Oct 2026: "The whole point of Mizel was to be fully private so no public agent can read its transcripts."

@@ -24,8 +24,8 @@ project='recorder-proof-'+str(os.getpid())
 compose=root/'compose.json'
 services={
  'transcriber':{'image':'ghcr.io/speaches-ai/speaches@sha256:2fedebb4b4dccd37ab8f233374ae32bd5b11ee96e8033d2a0a230b9cd052e409',
-                'ports':['127.0.0.1::8000'],'environment':{'WHISPER__COMPUTE_TYPE':'int8'},
-                'volumes':['models:/home/ubuntu/.cache/huggingface']},
+                'ports':['127.0.0.1::8000'],'environment':{'WHISPER__COMPUTE_TYPE':'int8','HF_HUB_CACHE':'/var/tmp/hf'},
+                'user':'0:0','volumes':['models:/var/tmp/hf']},  # test-only fixture: root so the fresh named cache volume is writable
  'wizard-recorder':{'image':args.image,'user':'1000:1000','read_only':True,'tmpfs':['/tmp'],'cap_drop':['ALL'],
                     'security_opt':['no-new-privileges:true'],'ports':['127.0.0.1::8080'],
                     'environment':{'TRANSCRIPTION_URL':'http://transcriber:8000/v1/audio/transcriptions',

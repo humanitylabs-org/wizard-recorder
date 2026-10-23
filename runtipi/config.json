@@ -11,7 +11,7 @@
   ],
   "description": "Empty-by-default recorder with notes, browser/native capture, audio upload, HTTP API, MCP and shared transcription.",
   "tipi_version": 1,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "source": "https://github.com/humanitylabs-org/wizard-recorder",
   "exposable": false,
   "supported_architectures": [

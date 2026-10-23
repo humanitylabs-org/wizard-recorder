@@ -102,7 +102,10 @@ try:
     request(base+'/api/meetings/'+mid+'/notes',{'notes':'Persistence proof note','base_rev':0},method='PUT')
     env={**os.environ,'RECORDER_QA_BASE':base,'RECORDER_QA_MEETING':mid,'RECORDER_QA_EVIDENCE':str(evidence)}
     run(['node',str(Path(__file__).with_name('browser.mjs'))],env=env)
-    ctl('restart','wizard-recorder');ready(base+'/healthz')
+    ctl('restart','wizard-recorder')
+    # Ephemeral host ports are reassigned on restart; re-resolve before checking persistence.
+    base='http://127.0.0.1:'+ctl('port','wizard-recorder','8080').split(':')[-1]+'/wizard-recorder'
+    ready(base+'/healthz')
     kept=request(base+'/api/meetings/'+mid)
     assert kept['notes']=='Persistence proof note' and kept['segments']==m['segments']
     assert request(base+'/api/meetings/'+mid+'/audio.wav')==audio

@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       confirm_version:
-        description: Repeat the new write-once version (0.3.0)
+        description: Repeat the new write-once version (0.3.1)
         required: true
         type: string
 permissions:
@@ -31,7 +31,7 @@ jobs:
           CONFIRM_VERSION: ${{ inputs.confirm_version }}
         run: |
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
-          test "$CONFIRM_VERSION" = "0.3.0"
+          test "$CONFIRM_VERSION" = "0.3.1"
       - name: Verify isolated source
         shell: bash
         run: |
@@ -70,7 +70,7 @@ jobs:
           docker buildx build --platform linux/arm64,linux/amd64 --provenance=false --push -f app/Dockerfile \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             --metadata-file "$RUNNER_TEMP/evidence/build-metadata.json" \
-            -t ghcr.io/humanitylabs-org/wizard-recorder:0.3.0 \
+            -t ghcr.io/humanitylabs-org/wizard-recorder:0.3.1 \
             -t ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" . 2>&1 | tee "$RUNNER_TEMP/evidence/image-build.log"
           docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" | tee "$RUNNER_TEMP/evidence/image-manifest.log"
           GH_TOKEN="$GHCR_TOKEN" gh api orgs/humanitylabs-org/packages/container/wizard-recorder --jq '{name,visibility,repository:.repository.full_name}' | tee "$RUNNER_TEMP/evidence/package-privacy.json"

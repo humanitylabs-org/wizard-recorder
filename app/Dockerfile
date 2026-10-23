@@ -15,6 +15,8 @@ RUN cd /app/view && npm ci --omit=dev --ignore-scripts && npm cache clean --forc
 COPY app/*.py /app/
 COPY view/*.mjs view/provider.js /app/view/
 COPY view/web /app/view/web
+# Build-context file modes vary by checkout umask; the non-root user must read the app.
+RUN chmod -R a+rX /app
 USER 1000:1000
 WORKDIR /app
 EXPOSE 8080

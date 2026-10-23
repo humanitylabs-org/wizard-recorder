@@ -1,17 +1,39 @@
 name: Thales private image and clean proof
 on:
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed source commit
+        required: true
+        type: string
+      confirm_version:
+        description: Repeat the new write-once version (0.3.0)
+        required: true
+        type: string
 permissions:
   contents: read
   packages: write
 jobs:
   publish-and-prove:
+    if: github.repository == 'humanitylabs-org/wizard-recorder' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/portable-recorder'
     runs-on: [self-hosted, macOS, ARM64, wizard-recorder-qa]
     timeout-minutes: 100
     env:
       DOCKER_CONTEXT: colima-wizard-agents
+      UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+      UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-python
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify reviewed dispatch
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          CONFIRM_VERSION: ${{ inputs.confirm_version }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$CONFIRM_VERSION" = "0.3.0"
       - name: Verify isolated source
         shell: bash
         run: |
@@ -32,17 +54,20 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="/opt/homebrew/bin:$PATH"
+          socket=$(docker context inspect colima-wizard-agents --format '{{.Endpoints.docker.Host}}')
+          unset DOCKER_CONTEXT
+          export DOCKER_HOST="$socket"
           export DOCKER_CONFIG="$RUNNER_TEMP/registry-auth"
           mkdir -p "$DOCKER_CONFIG"
           builder="recorder-${GITHUB_RUN_ID}"
-          trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true; docker logout ghcr.io >/dev/null; rm -rf "$DOCKER_CONFIG"' EXIT
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
           if GH_TOKEN="$GHCR_TOKEN" gh api orgs/humanitylabs-org/packages/container/wizard-recorder > "$RUNNER_TEMP/evidence/package-before.json"; then
             python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/package-before.json"))["visibility"]=="private", "Refusing to push to a non-private package"'
           else
             python3 -c 'import json,os; assert str(json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/package-before.json")).get("status"))=="404", "Cannot verify package privacy before push"'
           fi
-          docker buildx create --name "$builder" --driver docker-container --use colima-wizard-agents
+          python3 qa/registry-auth.py
+          docker buildx create --name "$builder" --driver docker-container --use "$DOCKER_HOST"
           docker buildx build --platform linux/arm64,linux/amd64 --provenance=false --push -f app/Dockerfile \
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             --metadata-file "$RUNNER_TEMP/evidence/build-metadata.json" \

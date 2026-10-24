@@ -45,15 +45,25 @@ function freezeLiveSummary(sm){
   for(const topic of sm.topics)topic.active=false;
   return true;
 }
+function apiGet(pathname){
+  return new Promise((resolve,reject)=>{
+    const r=http.request({host:UP.host,port:UP.port,path:pathname,method:'GET',headers:{host:'127.0.0.1:8080'},timeout:10000},res=>{
+      let raw='';res.setEncoding('utf8');res.on('data',c=>{raw+=c;if(raw.length>8*1024*1024){r.destroy(Error('too large'));}});
+      res.on('end',()=>{try{resolve({status:res.statusCode,body:res.statusCode===200?JSON.parse(raw):null});}catch(e){reject(e);}});
+    });
+    r.on('timeout',()=>r.destroy(Error('timeout')));r.on('error',reject);r.end();
+  });
+}
 async function flushSummary(mid){
   if(!models)return null;
   if(summaryJobs.has(mid))return summaryJobs.get(mid);
   const job=(async()=>{
     try{
       // Use the durable shared-transcriber transcript, not provisional captions.
-      const response=await fetch(`http://${UP.host}:${UP.port}/api/meetings/${mid}`,{headers:{Host:'127.0.0.1:8080'},signal:AbortSignal.timeout(10000)});
-      if(!response.ok)return null;
-      const meeting=await response.json(),sm=summaryFor(mid);
+      // fetch() silently drops a custom Host header, and the API allow-lists Host; use http.request.
+      const reply=await apiGet(`/api/meetings/${mid}`);
+      if(reply.status!==200){logEvent('summary.unavailable',{meetingId:mid,stage:'transcript',status:reply.status});return null;}
+      const meeting=reply.body,sm=summaryFor(mid);
       const transcript=(meeting.segments||[]).filter(s=>s.end_ms>sm.summarizedToMs).slice(0,40).map(s=>({text:s.text,startMs:s.start_ms,endMs:s.end_ms}));
       if(transcript.length){
         const {delta,provenance}=await models.summarize({activeTopic:sm.topics.at(-1)||null,transcript});
@@ -70,7 +80,7 @@ async function flushSummary(mid){
       }
       if(meeting.status==='ready')freezeLiveSummary(sm);
       saveSummary(mid);broadcast(mid,{type:'summary',summary:sm});return sm;
-    }catch{logEvent('summary.unavailable',{meetingId:mid});return null;}
+    }catch(e){logEvent('summary.unavailable',{meetingId:mid,stage:'model',reason:String(e?.message||e).slice(0,120)});return null;}
     finally{summaryJobs.delete(mid);}
   })();
   summaryJobs.set(mid,job);return job;

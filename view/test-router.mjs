@@ -64,7 +64,7 @@ fake.on('upgrade',(req,socket,head)=>{
 await new Promise(r=>fake.listen(0,'127.0.0.1',r));
 const router='http://127.0.0.1:'+fake.address().port;
 const reserved=http.createServer();await new Promise(r=>reserved.listen(0,'127.0.0.1',r));const apiPort=reserved.address().port;await new Promise(r=>reserved.close(r));
-const childEnv={...process.env,MEETINGS_DATA:data,MEETINGS_ALLOWED_HOSTS:`127.0.0.1:8080,127.0.0.1:${apiPort}`,TRANSCRIPTION_URL:router+'/v1/audio/transcriptions',WIZARD_ROUTER_URL:router,WIZARD_ROUTER_GRANT:grant};
+const childEnv={...process.env,MEETINGS_DATA:data,MEETINGS_ALLOWED_HOSTS:`127.0.0.1:8080`,TRANSCRIPTION_URL:router+'/v1/audio/transcriptions',WIZARD_ROUTER_URL:router,WIZARD_ROUTER_GRANT:grant};
 for(const key of Object.keys(childEnv))if(/API_KEY|MEETINGS_LLM_|RECORDER_REALTIME_MODEL/.test(key))delete childEnv[key];
 const python=spawn(process.env.RECORDER_TEST_PYTHON||'python3',['-m','uvicorn','server:app','--host','127.0.0.1','--port',String(apiPort),'--log-level','warning'],{cwd:new URL('../app/',import.meta.url),env:childEnv,stdio:['ignore','pipe','pipe']});
 let pythonLog='';python.stdout.on('data',b=>pythonLog+=b);python.stderr.on('data',b=>pythonLog+=b);
@@ -77,7 +77,8 @@ after(async()=>{
   python.kill('SIGTERM');await Promise.race([once(python,'exit'),new Promise(r=>setTimeout(r,1000))]);if(python.exitCode===null)python.kill('SIGKILL');
   await new Promise(r=>fake.close(r));wss.close();fs.rmSync(data,{recursive:true,force:true});
 });
-await until(async()=>{try{return (await fetch(`http://127.0.0.1:${apiPort}/healthz`)).ok;}catch{return false;}});
+// Probe like the bridge does: the API allow-lists only the public Host, which fetch() cannot set.
+await until(()=>new Promise(resolve=>{const r=http.get({host:'127.0.0.1',port:apiPort,path:'/healthz',headers:{host:'127.0.0.1:8080'}},res=>{res.resume();resolve(res.statusCode===200);});r.on('error',()=>resolve(false));}));
 Object.assign(process.env,{NODE_ENV:'test',MEETINGS_DATA:data,RECORDER_API_PORT:String(apiPort),WIZARD_ROUTER_URL:router,WIZARD_ROUTER_GRANT:grant});
 const {server}=await import('./server.mjs');await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base='http://127.0.0.1:'+server.address().port+'/wizard-recorder';

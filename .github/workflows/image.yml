@@ -43,7 +43,7 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/recorder-venv/bin/python" -r app/requirements.txt pytest
           "$RUNNER_TEMP/recorder-venv/bin/python" -m pytest tests -q 2>&1 | tee "$RUNNER_TEMP/evidence/pytest.log"
           npm --prefix view ci --ignore-scripts
-          npm --prefix view test 2>&1 | tee "$RUNNER_TEMP/evidence/node-tests.log"
+          RECORDER_TEST_PYTHON="$RUNNER_TEMP/recorder-venv/bin/python" npm --prefix view test 2>&1 | tee "$RUNNER_TEMP/evidence/node-tests.log"
           python3 qa/scan-source.py | tee "$RUNNER_TEMP/evidence/source-scan.log"
           npm --prefix qa ci --ignore-scripts
       - name: Multi-architecture build on Thales and publish private package

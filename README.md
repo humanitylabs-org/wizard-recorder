@@ -6,7 +6,7 @@ view service is needed. Fresh installs contain no recordings or owner configurat
 
 Historical note: previously named Mizel.ai / meeting-recorder.
 
-## Baseline — only a shared transcriber
+## Durable capture and outage fallback
 
 - Record with the shared Wizard browser/native capture resource; 5-second durable
   audio chunks go to the box's OpenAI-compatible transcription slot. This is

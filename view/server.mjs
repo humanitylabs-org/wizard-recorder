@@ -51,7 +51,7 @@ async function flushSummary(mid){
   const job=(async()=>{
     try{
       // Use the durable shared-transcriber transcript, not provisional captions.
-      const response=await fetch(`http://${UP.host}:${UP.port}/api/meetings/${mid}`,{signal:AbortSignal.timeout(10000)});
+      const response=await fetch(`http://${UP.host}:${UP.port}/api/meetings/${mid}`,{headers:{Host:'127.0.0.1:8080'},signal:AbortSignal.timeout(10000)});
       if(!response.ok)return null;
       const meeting=await response.json(),sm=summaryFor(mid);
       const transcript=(meeting.segments||[]).filter(s=>s.end_ms>sm.summarizedToMs).slice(0,40).map(s=>({text:s.text,startMs:s.start_ms,endMs:s.end_ms}));
@@ -229,7 +229,7 @@ class LiveSession {
 
   }
   onCompleted(text) {
-    const t = String(text || this.partial).replace(/\s+/g, ' ').trim();
+    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
     const before = this.finals.length;
     if (t) {
       const utterance={text:t,startMs:(this.baseMs||0)+this.segStartMs,endMs:(this.baseMs||0)+this.audioMs};
@@ -248,6 +248,8 @@ class LiveSession {
   }
   onProviderError(error) {
     logEvent('provider.error', { meetingId: this.meetingId, error: String(error?.message || error?.error?.message || 'provider connection dropped').slice(0, 240), status: error?.status || null, code: error?.code || null });
+    this.partial = ''; this.segStartMs = this.audioMs;
+    this.send({ type: 'words', partial: '', startMs: (this.baseMs || 0) + this.segStartMs });
     this.send({ type: 'status', live: false, retrying: true, reason: 'Live words dropped out, recording continues. Reconnecting…' });
     const dead = this.stream; this.stream = null; safeClose(dead, this.meetingId);
     // Reopen on the same socket: follow mode keeps reading uploaded chunks, socket audio is held meanwhile.
@@ -257,7 +259,7 @@ class LiveSession {
   text() { return this.partial ? `${this.finals} ${this.partial.trim()}` : this.finals; }
   close({ finish = false } = {}) {
     if (this.closed) return; this.closed = true;
-    if (finish && freezeLiveSummary(summaryFor(this.meetingId))) saveSummary(this.meetingId);
+    try { if (finish && freezeLiveSummary(summaryFor(this.meetingId))) saveSummary(this.meetingId); } catch { logEvent('summary.unavailable',{meetingId:this.meetingId}); }
 
     clearInterval(this.commitTimer); clearInterval(this.followTimer); clearTimeout(this.idleTimer); clearTimeout(this.reopenTimer);
     try { this.stream?.commit(); } catch { /* ignore */ }

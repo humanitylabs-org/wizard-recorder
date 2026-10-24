@@ -24,7 +24,7 @@ export class RouterModels {
         if (typeof msg.text !== 'string') throw Error('Invalid model text');
         text += msg.text;
       } else if (type === 'done') {
-        if (!msg.provider || !msg.model || !msg.tier || !msg.tested_on || typeof msg.chosen !== 'boolean' || !msg.usage || typeof msg.usage !== 'object' || Array.isArray(msg.usage)) throw Error('Router completion has no verified provenance');
+        if (!['provider','model','tier','tested_on'].every(k => typeof msg[k] === 'string' && msg[k]) || !['match','owner-pick','owner-swap'].includes(msg.chosen) || !msg.usage || typeof msg.usage !== 'object' || Array.isArray(msg.usage)) throw Error('Router completion has no verified provenance');
         provenance = msg;
       } else throw Error('Unexpected model event');
     };

@@ -72,6 +72,15 @@ try:
     assert b'<title>Recorder' in request(base+'/')
     caps=request(base+'/capabilities.js').decode()
     for feature in ('realtime','summaries','agent','orb'):assert f'"{feature}":false' in caps
+    # A fake Router URL/grant advertises features; actual readiness belongs to Router needs.
+    # This exec is an isolated module probe, not a second app or a live install mutation.
+    probe=ctl('exec','-T','-e','NODE_ENV=test','-e','WIZARD_ROUTER_URL=http://fake-router:8802',
+              '-e','WIZARD_ROUTER_GRANT=synthetic-grant','wizard-recorder','node','--input-type=module','-e',
+              "import('/app/view/server.mjs').then(({capabilities})=>console.log(JSON.stringify(capabilities())))")
+    configured=json.loads(probe)
+    assert configured['realtime'] is True and configured['summaries'] is True
+    assert configured['agent'] is False and configured['orb'] is False
+    evidence.joinpath('router-capabilities.json').write_text(json.dumps(configured,indent=2))
     ready(stt+'/health')
     request(stt+'/v1/models/Systran/faster-whisper-tiny.en',b'',method='POST',timeout=600)
     # TTS generation runs here, on the build machine, using only synthetic fixture text.

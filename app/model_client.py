@@ -45,7 +45,7 @@ async def model_run(messages, *, feature='recap', max_tokens=3000, timeout=180):
             output.append(value['text'])
         elif kind == 'done':
             if (not all(isinstance(value.get(k), str) and value[k] for k in ('model', 'provider', 'tier', 'tested_on'))
-                    or type(value.get('chosen')) is not bool or not isinstance(value.get('usage'), dict)):
+                    or value.get('chosen') not in ('match', 'owner-pick', 'owner-swap') or not isinstance(value.get('usage'), dict)):
                 raise RuntimeError('Connection Router completion has no verified provenance')
             provenance = value
         else:

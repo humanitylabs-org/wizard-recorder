@@ -77,3 +77,49 @@ def test_router_stream_requires_completion_and_never_falls_back(monkeypatch):
     with pytest.raises(RuntimeError,match='provenance'):
         asyncio.run(m.model_run([{'role':'user','content':'fixture'}]))
     assert calls==['http://router/v1/models/recap/run']
+
+
+@pytest.mark.parametrize('failure', ['truncated', 'error', 'bad-provenance', 'bad-chosen', 'after-done', 'not-sse', 'redirect'])
+def test_recap_router_rejects_unvalidated_streams(monkeypatch, failure):
+    import model_client as m
+    import httpx
+    monkeypatch.setenv('WIZARD_ROUTER_URL', 'http://router')
+    monkeypatch.setenv('WIZARD_ROUTER_GRANT', 'fixture-grant')
+    done = {'type': 'done', 'provider': 'private-fixture', 'model': 'fixture',
+            'tier': 'standard', 'tested_on': 'deepseek-v4-1-flash', 'chosen': 'owner-swap', 'usage': {}}
+    def handle(req):
+        assert req.headers['X-Wizard-Grant'] == 'fixture-grant'
+        body = json.loads(req.content)
+        assert body == {'system': 'Fixture system', 'messages': [{'role': 'user', 'content': 'Fixture'}],
+                        'max_tokens': 3000, 'stream': True}
+        text = 'event: delta\ndata: {"text":"Untrusted draft"}\n\n'
+        if failure == 'redirect':
+            return httpx.Response(307, headers={'Location': 'http://not-router'})
+        if failure == 'error':
+            text += 'event: error\ndata: {"type":"error","code":"signed_out"}\n\n'
+        elif failure == 'bad-provenance':
+            text += 'event: done\ndata: {"type":"done","provider":"fixture","model":"fixture"}\n\n'
+        elif failure == 'bad-chosen':
+            text += 'event: done\ndata: ' + json.dumps({**done, 'chosen': True}) + '\n\n'
+        elif failure in ('after-done', 'not-sse'):
+            text += 'event: done\ndata: ' + json.dumps(done) + '\n\n'
+            if failure == 'after-done':
+                text += 'event: delta\ndata: {"text":"Extra"}\n\n'
+        return httpx.Response(200, headers={'Content-Type': 'application/json' if failure == 'not-sse' else 'text/event-stream'}, text=text)
+    real = httpx.AsyncClient
+    monkeypatch.setattr(m.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handle), **kw))
+    with pytest.raises((RuntimeError, httpx.HTTPStatusError)):
+        asyncio.run(m.model_run([{'role': 'system', 'content': 'Fixture system'}, {'role': 'user', 'content': 'Fixture'}]))
+
+
+def test_model_needs_require_both_router_fields(monkeypatch):
+    import model_client as m
+    monkeypatch.delenv('WIZARD_ROUTER_URL', raising=False)
+    monkeypatch.setenv('WIZARD_ROUTER_GRANT', 'fixture-grant')
+    assert not m.model_configured()
+    with pytest.raises(RuntimeError, match='required'):
+        asyncio.run(m.model_run([]))
+    monkeypatch.setenv('WIZARD_ROUTER_URL', 'http://router')
+    assert m.model_configured()
+    monkeypatch.delenv('WIZARD_ROUTER_GRANT')
+    assert not m.model_configured()

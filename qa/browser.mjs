@@ -34,7 +34,7 @@ try {
   // Host conformance harness: real app facade, real registration/history callbacks.
   // It supplies only appearance and invokes Back; it does not emulate an agent/capture provider.
   const hostURL=new URL('/recorder-qa-host',base).href;
-  await page.route(hostURL,route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html><body style="margin:0"><script>
+  await page.route(hostURL,route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0"><script>
   window.WizAppServices={connect:(w,client)=>{window.appClient=client;return null}};
   addEventListener('message',e=>{const d=e.data;if(d?.type==='wizard:app:request'&&d.op==='ready')e.source.postMessage({type:'wizard:app:reply',version:1,id:d.id,value:{version:1,hosted:true}},location.origin)});
   </script><iframe id="app-frame" src="${base}/" style="width:100vw;height:100dvh;border:0"></iframe></body></html>`}));

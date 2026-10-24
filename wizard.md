@@ -6,7 +6,7 @@ type: service
 category: app
 tags: [audio, meetings, notes]
 privacy: private
-version: 0.3.5
+version: 0.4.0
 summary: Record, upload, play back and search audio transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
@@ -36,20 +36,13 @@ agent_binding:
   purpose: Send a recording to the agent selected in Wizard
 requires:
   models:
-    live-summary:
-      tier: fast
-      tested_on: deepseek-v4-1-flash
-      swap: ask
-      optional: true
+    live-summary: {tier: fast, tested_on: deepseek-v4-1-flash, swap: ask, private_data: true, abilities: [text, streaming], purpose: "Live outline while you record"}
+    recap: {tier: standard, tested_on: deepseek-v4-1-flash, swap: ask, private_data: true, abilities: [text, streaming], purpose: "Summary when a recording ends"}
+  services:
+    - slot: live-transcription
+      recommend: wizard-tinfoil
       private_data: true
-      abilities: [text, streaming]
-    recap:
-      tier: standard
-      tested_on: deepseek-v4-1-flash
-      swap: ask
-      optional: true
-      private_data: true
-      abilities: [text, streaming]
+      purpose: "Words appear as you speak"
 health: /healthz
 ---
 
@@ -58,4 +51,5 @@ health: /healthz
 One self-contained image serves the view, API and six MCP tools. Fresh installs start empty;
 /data contains SQLite, audio, notes and optional outbox/outline state. Uninstall preserves data.
 Browser/native capture, shared chunk transcription, notes, search, upload, export and playback
-need no agent, LLM or Tinfoil. Upgrade features remain hidden until explicitly configured.
+survive a live-service outage. Installation requires private live transcription and models
+through the Connection Router setup checklist; no provider keys belong in this app.

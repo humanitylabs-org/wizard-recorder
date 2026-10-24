@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { TinfoilProvider } from './provider.js';
+import { LiveClient } from './live-client.js';
+import { RouterModels } from './router-models.js';
 import { OrbEvents } from './orb-events.mjs';
 
 const WEB=fileURLToPath(new URL('./web/',import.meta.url));
@@ -14,16 +15,74 @@ const UP={host:'127.0.0.1',port:Number(process.env.RECORDER_API_PORT||8081),base
 const MEETINGS_AUDIO=path.join(DATA,'audio');
 const FOLLOW_POLL_MS=700,FOLLOW_FRAME_MS=40,FOLLOW_GAP_SKIP_MS=15000,FOLLOW_IDLE_CLOSE_MS=45*60*1000,COMMIT_MS=6000;
 export function capabilities(env=process.env) {
-  return {realtime:!!env.TINFOIL_API_KEY,
-    summaries:!!((env.WIZARD_ROUTER_URL && env.WIZARD_ROUTER_GRANT)||(env.MEETINGS_LLM_URL && env.MEETINGS_LLM_MODEL)),
+  return {realtime:!!(env.WIZARD_ROUTER_URL && env.WIZARD_ROUTER_GRANT),
+    summaries:!!(env.WIZARD_ROUTER_URL && env.WIZARD_ROUTER_GRANT),
     agent:!!(env.WIZARD_DELIVERY_URL && env.WIZARD_DELIVERY_TOKEN),orb:env.RECORDER_ORB_EVENTS==='1'};
 }
 const caps=capabilities();
-const provider=caps.realtime?new TinfoilProvider(process.env.TINFOIL_API_KEY,null,process.env.RECORDER_REALTIME_MODEL||'voxtral-mini-4b-realtime'):null;
+const provider=caps.realtime?new LiveClient(process.env.WIZARD_ROUTER_URL,process.env.WIZARD_ROUTER_GRANT):null;
+const models=caps.summaries?new RouterModels(process.env.WIZARD_ROUTER_URL,process.env.WIZARD_ROUTER_GRANT):null;
 const events=caps.orb?new OrbEvents(path.join(DATA,'orb-events.json')):null;
 const sockets=new Map(),state={asks:{},threads:{}};
-const asksFor=()=>[], publicAsk=x=>x, publicSummary=x=>x, summaryFor=()=>null;
-const startSummaries=()=>{},stopSummaries=()=>{},freezeLiveSummary=()=>false,save=()=>{};
+const asksFor=()=>[], publicAsk=x=>x, publicSummary=x=>x;
+const summaries=new Map(), summaryTimers=new Map(), summaryJobs=new Map();
+function outlinePath(mid){return path.join(DATA,'outlines',mid+'.json');}
+function summaryFor(mid){
+  if(!summaries.has(mid)){
+    let sm={topics:[],summarizedToMs:0};
+    try{sm=JSON.parse(fs.readFileSync(outlinePath(mid),'utf8'));}catch{}
+    summaries.set(mid,sm);
+  }
+  return summaries.get(mid);
+}
+function saveSummary(mid){
+  fs.mkdirSync(path.dirname(outlinePath(mid)),{recursive:true});
+  const tmp=outlinePath(mid)+'.tmp';fs.writeFileSync(tmp,JSON.stringify(summaryFor(mid)));fs.renameSync(tmp,outlinePath(mid));
+}
+function freezeLiveSummary(sm){
+  if(!sm || sm.originalLiveSummary)return false;
+  sm.originalLiveSummary=structuredClone({topics:sm.topics});
+  for(const topic of sm.topics)topic.active=false;
+  return true;
+}
+async function flushSummary(mid){
+  if(!models)return null;
+  if(summaryJobs.has(mid))return summaryJobs.get(mid);
+  const job=(async()=>{
+    try{
+      // Use the durable shared-transcriber transcript, not provisional captions.
+      const response=await fetch(`http://${UP.host}:${UP.port}/api/meetings/${mid}`,{signal:AbortSignal.timeout(10000)});
+      if(!response.ok)return null;
+      const meeting=await response.json(),sm=summaryFor(mid);
+      const transcript=(meeting.segments||[]).filter(s=>s.end_ms>sm.summarizedToMs).slice(0,40).map(s=>({text:s.text,startMs:s.start_ms,endMs:s.end_ms}));
+      if(transcript.length){
+        const {delta,provenance}=await models.summarize({activeTopic:sm.topics.at(-1)||null,transcript});
+        if(delta.newBullets.length){
+          let topic=sm.topics.at(-1);
+          if(!topic || delta.topicChanged){
+            if(topic)topic.active=false;
+            topic={id:`${mid}-${transcript[0].startMs}`,title:delta.title,bullets:[],startMs:transcript[0].startMs,active:meeting.status==='recording'};
+            sm.topics.push(topic);
+          }
+          topic.bullets.push(...delta.newBullets.map((b,i)=>({...b,id:`${mid}-${b.atMs}-${topic.bullets.length+i}`})));
+        }
+        sm.summarizedToMs=Math.max(...transcript.map(s=>s.endMs));sm.updatedAt=new Date().toISOString();sm.provenance=provenance;
+      }
+      if(meeting.status==='ready')freezeLiveSummary(sm);
+      saveSummary(mid);broadcast(mid,{type:'summary',summary:sm});return sm;
+    }catch{logEvent('summary.unavailable',{meetingId:mid});return null;}
+    finally{summaryJobs.delete(mid);}
+  })();
+  summaryJobs.set(mid,job);return job;
+}
+function startSummaries(mid){
+  if(!models || summaryTimers.has(mid))return;
+  summaryTimers.set(mid,setInterval(()=>void flushSummary(mid),10000));void flushSummary(mid);
+}
+function stopSummaries(mid){
+  if(sockets.get(mid)?.size)return;
+  clearInterval(summaryTimers.get(mid));summaryTimers.delete(mid);void flushSummary(mid);
+}
 function logEvent(event,data={}) {console.log(JSON.stringify({event,...data}));}
 function broadcast(mid,value){for(const s of sockets.get(mid)||[])s.send(value);}
 function safeClose(stream,mid){try{Promise.resolve(stream?.close()).catch(()=>logEvent('realtime.close_error',{mid}));}catch{}}
@@ -172,7 +231,12 @@ class LiveSession {
   onCompleted(text) {
     const t = String(text || this.partial).replace(/\s+/g, ' ').trim();
     const before = this.finals.length;
-    if (t) this.send({ type: 'settled', text: t, startMs: (this.baseMs || 0) + this.segStartMs, endMs: (this.baseMs || 0) + this.audioMs });
+    if (t) {
+      const utterance={text:t,startMs:(this.baseMs||0)+this.segStartMs,endMs:(this.baseMs||0)+this.audioMs};
+      // Caption archive is separate from the durable batch transcript (never duplicated into segments).
+      try{const dir=path.join(DATA,'live');fs.mkdirSync(dir,{recursive:true});fs.appendFileSync(path.join(dir,this.meetingId+'.jsonl'),JSON.stringify(utterance)+'\n');}catch{logEvent('live.archive_unavailable',{meetingId:this.meetingId});}
+      this.send({type:'settled',...utterance});
+    }
     this.segStartMs = this.audioMs;
     if (t) this.finals = (this.finals ? `${this.finals} ` : '') + t;
     // Offsets into the partial region keep their meaning once it settles.
@@ -193,12 +257,12 @@ class LiveSession {
   text() { return this.partial ? `${this.finals} ${this.partial.trim()}` : this.finals; }
   close({ finish = false } = {}) {
     if (this.closed) return; this.closed = true;
-    if (finish && freezeLiveSummary(summaryFor(this.meetingId))) save();
+    if (finish && freezeLiveSummary(summaryFor(this.meetingId))) saveSummary(this.meetingId);
 
     clearInterval(this.commitTimer); clearInterval(this.followTimer); clearTimeout(this.idleTimer); clearTimeout(this.reopenTimer);
     try { this.stream?.commit(); } catch { /* ignore */ }
     const stream = this.stream;
-    setTimeout(() => safeClose(stream, this.meetingId), 4000);
+    safeClose(stream, this.meetingId);
     sockets.get(this.meetingId)?.delete(this);
     if (this.meetingId) stopSummaries(this.meetingId);
     logEvent('live.closed', { meetingId: this.meetingId, audioMs: this.audioMs });
@@ -235,9 +299,15 @@ export const server=http.createServer(async(req,res)=>{
     if(p.startsWith(BASE+'/'))p=p.slice(BASE.length);
     if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!safeOrigin(req))return send(res,403,{error:'Cross-origin writes are not allowed'});
     if(p==='/capabilities.js')return send(res,200,'window.RecorderCapabilities='+JSON.stringify(caps)+';','text/javascript');
-    if(p==='/live-health')return send(res,200,{ok:true,build:'0.3.5',...caps});
+    if(p==='/live-health')return send(res,200,{ok:true,build:'0.4.0',...caps});
     if(p==='/asks')return send(res,200,{asks:[]});
-    if(p==='/summary')return proxy(req,res,'/api/live-summary'+url.search);
+    if(p==='/summary' || p==='/api/live-summary'){
+      const mid=url.searchParams.get('meetingId')||'';
+      if(!/^[A-Za-z0-9_-]{3,64}$/.test(mid))return send(res,400,{error:'Invalid meeting id'});
+      if(!models)return send(res,200,{summary:null,building:false,configured:false});
+      await flushSummary(mid);
+      return send(res,200,{summary:summaryFor(mid),building:summaryJobs.has(mid),configured:true});
+    }
     if(p==='/orb-events'){
       if(!events)return send(res,404,{error:'Orb events are disabled'});
       if(req.method==='GET')return send(res,200,{events:events.list(url.searchParams.get('meetingId'))});

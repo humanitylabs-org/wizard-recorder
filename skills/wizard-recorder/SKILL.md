@@ -15,3 +15,14 @@ awaiting_device is not a successful microphone recording.
 No private agent is required for capture, upload, transcription, notes, search,
 export or playback. Send to agent is available only through the configured app
 binding. Never access a host agent database or private runtime API.
+
+## Connections and outage behavior
+
+Recorder requires private live-transcription, live-summary (fast) and recap
+(standard). Use the shared Connection Router setup checklist; wizard-tinfoil is
+recommended for live words. Configure providers in their own apps, never supply
+provider keys to Recorder. Runtime integration uses only WIZARD_ROUTER_URL and an
+app-scoped WIZARD_ROUTER_GRANT. Shared TRANSCRIPTION_URL remains the durable batch
+transcript source; a live-service failure must not stop capture or chunk uploads.
+Summaries admit only completed Router SSE with provenance and validated outline
+JSON. Provisional captions are not durable transcript evidence; cite batch segments.

@@ -35,9 +35,6 @@ BASE = "/wizard-recorder"
 DATA = Path(os.environ.get("MEETINGS_DATA_DIR", os.environ.get("MEETINGS_DATA", "/data")))
 WEB = Path(os.environ.get("MEETINGS_WEB_DIR", Path(__file__).resolve().parent.parent / "web"))
 STT_URL = os.environ.get("TRANSCRIPTION_URL", "http://transcriber:8000/v1/audio/transcriptions")
-LLM_URL = os.environ.get("MEETINGS_LLM_URL", "")
-LLM_MODEL = os.environ.get("MEETINGS_LLM_MODEL", "")
-LLM_FAST_MODEL = os.environ.get("MEETINGS_LLM_FAST_MODEL", LLM_MODEL)
 CALENDAR_ACCOUNT = os.environ.get("MEETINGS_CALENDAR_ACCOUNT", "")
 CALENDAR_ID = os.environ.get("MEETINGS_CALENDAR_ID", "")
 USER_MARK = "\u2063"
@@ -47,10 +44,6 @@ TEMPLATES = {
     "sales": ["Context", "Pain points", "Current solution", "Budget and timing", "Objections", "Next steps"],
 }
 SOURCE_LABEL = {"me": "Me", "them": "Them", "mixed": "Speaker"}
-
-
-def _llm_key() -> str:
-    return os.environ.get("MEETINGS_LLM_KEY", "")
 
 
 def now_iso() -> str:
@@ -326,6 +319,7 @@ async def run_enhance(mid: str, template: str) -> None:
                 + f"\n<user_notes>\n{notes or '(none)'}\n</user_notes>\n\n<transcript>\n{tx or '(no transcript)'}\n</transcript>")
         md = await llm([{"role": "system", "content": ENHANCE_SYSTEM.format(sections=sections)},
                         {"role": "user", "content": user}], max_tokens=4000)
+        provenance = getattr(md, "provenance", {})
         # Mark the user's own lines so the view can style them as "yours".
         own = {re.sub(r"^[-*#\s]+", "", l).strip().lower() for l in notes.splitlines() if l.strip()}
         out_lines = []
@@ -337,7 +331,7 @@ async def run_enhance(mid: str, template: str) -> None:
         evidence = [{"ref": f"E{n}", "segment_id": refs[f"E{n}"]["segment_id"], "start_ms": refs[f"E{n}"]["start_ms"],
                      "quote": refs[f"E{n}"]["text"][:400]} for n in used if f"E{n}" in refs]
         title_m = re.match(r"^\s*# (.+)$", md.replace(USER_MARK, ""), re.M)
-        enhanced = {"template": template, "markdown": md, "created_at": now_iso(), "model": LLM_MODEL, "evidence": evidence}
+        enhanced = {"template": template, "markdown": md, "created_at": now_iso(), "model": provenance.get("model"), "provenance": provenance, "evidence": evidence}
         with closing(db()) as c:
             row = c.execute("SELECT title, source, calendar_json, started_at FROM meetings WHERE id=?", (mid,)).fetchone()
             new_title = row["title"]

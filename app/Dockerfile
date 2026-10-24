@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY view/package*.json /app/view/
 RUN cd /app/view && npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY app/*.py /app/
-COPY view/*.mjs view/provider.js /app/view/
+COPY view/*.mjs view/*.js /app/view/
 COPY view/web /app/view/web
 # Build-context file modes vary by checkout umask; the non-root user must read the app.
 RUN chmod -R a+rX /app

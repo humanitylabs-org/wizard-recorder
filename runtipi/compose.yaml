@@ -1,6 +1,6 @@
 services:
   wizard-recorder:
-    image: ghcr.io/humanitylabs-org/wizard-recorder:0.3.5
+    image: ghcr.io/humanitylabs-org/wizard-recorder:0.4.0
     user: 1000:1000
     read_only: true
     cap_drop: [ALL]
@@ -14,12 +14,8 @@ services:
       TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}
       MEETINGS_ALLOWED_ORIGINS: ${MEETINGS_ALLOWED_ORIGINS:-}
       MEETINGS_TIMEZONE: ${MEETINGS_TIMEZONE:-UTC}
-      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
       WIZARD_ROUTER_URL: ${WIZARD_ROUTER_URL:-}
       WIZARD_ROUTER_GRANT: ${WIZARD_ROUTER_GRANT:-}
-      MEETINGS_LLM_URL: ${MEETINGS_LLM_URL:-}
-      MEETINGS_LLM_MODEL: ${MEETINGS_LLM_MODEL:-}
-      MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
       WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
       WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
       RECORDER_ORB_EVENTS: ${RECORDER_ORB_EVENTS:-0}

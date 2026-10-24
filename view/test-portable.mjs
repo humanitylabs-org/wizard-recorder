@@ -1,6 +1,6 @@
 import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
-for(const key of ['TINFOIL_API_KEY','WIZARD_ROUTER_URL','WIZARD_ROUTER_GRANT','MEETINGS_LLM_URL','MEETINGS_LLM_MODEL','WIZARD_DELIVERY_URL','WIZARD_DELIVERY_TOKEN','RECORDER_ORB_EVENTS'])delete process.env[key];
+for(const key of ['WIZARD_ROUTER_URL','WIZARD_ROUTER_GRANT','WIZARD_DELIVERY_URL','WIZARD_DELIVERY_TOKEN','RECORDER_ORB_EVENTS'])delete process.env[key];
 const {capabilities,server}=await import('./server.mjs');
 
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -11,8 +11,8 @@ test('standalone has no optional dependency or agent configuration',()=>{
   assert.deepEqual(capabilities({}),{realtime:false,summaries:false,agent:false,orb:false});
   assert.equal(capabilities({WIZARD_DELIVERY_URL:'http://bound'}).agent,false);
   assert.equal(capabilities({WIZARD_ROUTER_URL:'http://router'}).summaries,false);
-  assert.equal(capabilities({MEETINGS_LLM_URL:'http://owner'}).summaries,false);
-  assert.equal(capabilities({TINFOIL_API_KEY:'fixture'}).realtime,true);
+  assert.equal(capabilities({WIZARD_ROUTER_GRANT:'fixture'}).realtime,false);
+  assert.equal(capabilities({WIZARD_ROUTER_URL:'http://router',WIZARD_ROUTER_GRANT:'fixture'}).realtime,true);
   assert.equal(capabilities({WIZARD_DELIVERY_URL:'http://bound',WIZARD_DELIVERY_TOKEN:'fixture'}).agent,true);
   assert.equal(capabilities({WIZARD_ROUTER_URL:'http://router',WIZARD_ROUTER_GRANT:'fixture'}).summaries,true);
 });

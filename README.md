@@ -33,7 +33,7 @@ docker run --name wizard-recorder --network wizard-apps -p 8080:8080 \
   -v "$PWD/recorder-data:/data" \
   -e TRANSCRIPTION_URL=http://transcriber:8000/v1/audio/transcriptions \
   -e TRANSCRIPTION_MODEL=Systran/faster-whisper-small \
-  ghcr.io/humanitylabs-org/wizard-recorder:0.3.5
+  ghcr.io/humanitylabs-org/wizard-recorder:0.4.0
 ```
 
 The existing shared transcriber must be reachable on that Docker network. Its
@@ -48,21 +48,41 @@ agent-outbox/. Restart keeps data. Removing the container does not remove the bi
 mount. Uninstall must preserve the directory. Protect and back up this private
 volume; no public app or agent needs access to it. Do not publish its contents.
 
-## Optional upgrades — off unless explicitly configured
+## Required connections (0.4.0)
 
-| Upgrade | Configuration |
-| --- | --- |
-| Tinfoil realtime words | `TINFOIL_API_KEY` from the install form; never a host secrets file. Optional `RECORDER_REALTIME_MODEL`. Shared transcription remains durable truth. |
-| Live outlines and recap | `WIZARD_ROUTER_URL` + app-scoped `WIZARD_ROUTER_GRANT`. Features `live-summary` and `recap` declare `private_data: true`. Approve a private provider in Wizard. SSE output is discarded without a valid completion/provenance. |
-| Direct model alternative | Owner-set `MEETINGS_LLM_URL` (full chat/completions endpoint), `MEETINGS_LLM_MODEL`, optional `MEETINGS_LLM_KEY`. Owner is responsible for this endpoint's privacy. Router failures never silently fall back here. |
-| Send to agent | `WIZARD_DELIVERY_URL` + `WIZARD_DELIVERY_TOKEN`, scoped by Wizard App → agent binding. No raw runtime API, agent selector or agent DB. Failed delivery stays queued with an idempotent key. |
-| Orb meeting event projection | Set `RECORDER_ORB_EVENTS=1`. App-local event journal only; no host queue DB or implicit ingestion of agent messages. |
+Wizard's shared setup checklist resolves the required needs in `wizard.md`:
 
-No LLM controls, live-provider sockets or agent-delivery controls appear in the
-baseline. Audio capture, saving, transcription and playback do not wait for them.
-A model route's declared tested_on identifier is inherited from the original
-summary implementation; new portable Connection Router integration needs its own
-configured-provider acceptance before claiming model quality.
+- **Words appear as you speak:** private `live-transcription` service, recommending
+  `wizard-tinfoil`. Another installed private provider can satisfy the same slot.
+- **Live outline while you record:** `live-summary`, fast tier.
+- **Summary when a recording ends:** `recap`, standard tier.
+
+Both model features require text + streaming and private data handling; their
+`tested_on` is `deepseek-v4-1-flash` with `swap: ask`. Setup and provider selection
+belong to Wizard, not a second setup screen in Recorder. Tinfoil holds its own
+credentials; Recorder has no provider keys, SDK or direct model endpoint.
+
+The runtime supplies `WIZARD_ROUTER_URL` and app-scoped `WIZARD_ROUTER_GRANT`.
+Recorder sends that grant only to the Router: WebSocket
+`/v1/services/live-transcription/v1/live` and SSE model runs at
+`/v1/models/live-summary/run` and `/v1/models/recap/run`. Models are never selected
+in request bodies. SSE text stays provisional until a validated `done` with
+provider/model/tier/tested_on/chosen/usage; errors or truncated streams discard it.
+Live-outline JSON and transcript timestamps are validated before saving.
+
+The live socket speaks `wizard.live-transcription/1`: start with PCM16 little-endian,
+16 kHz mono, wait/buffer for ready, binary frames at most 64 KiB, commit at pauses,
+stop then closed. Final captions are archived separately in `/data/live/`; they
+never duplicate or overwrite the shared transcriber's durable segments. Outline
+updates use those durable segments. A live-service outage never stops capture,
+chunk uploads, batch transcription or playback. No Router credentials means live
+and summary capabilities are false (useful for isolated recovery/acceptance);
+required setup is normally enforced by the shell before opening the app.
+
+Optional agent delivery still uses `WIZARD_DELIVERY_URL` + `WIZARD_DELIVERY_TOKEN`,
+scoped by the app binding. Failed delivery stays queued with an idempotent key.
+`RECORDER_ORB_EVENTS=1` enables app-local orb event projection. Neither integration
+requires raw runtime APIs or a host agent database.
 
 ## Move an existing data copy
 
@@ -88,7 +108,8 @@ uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -r app/requirements.txt pytest
 .venv/bin/python -m pytest -q
 npm --prefix view ci
-npm --prefix view test
+RECORDER_TEST_PYTHON="$PWD/.venv/bin/python" npm --prefix view test
+python3 qa/scan-source.py
 ```
 
 `qa/clean-install.py` is the destructive-to-its-own-project-only clean image proof:
@@ -97,3 +118,9 @@ transcript/search/MCP, playback/export, image restart and volume retention. It m
 run on the designated build machine; never point it at an owner's install.
 `qa/browser.mjs` exercises 390px layouts, two skins, optional-feature hiding and
 nested Back against that disposable instance.
+
+Node integration tests run an in-process fake Router (WebSocket + SSE), a synthetic
+shared-transcriber endpoint, the real Python API and the real Node bridge. They
+prove buffered audio, captions/final archive, strict outline/recap admission, grant
+headers, and continued chunk recording/transcription after live failure. These are
+protocol proofs, not evidence of real-provider quality or an image build.

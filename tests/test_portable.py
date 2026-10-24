@@ -9,7 +9,7 @@ from migrate_data import migrate, resolve_audio
 
 
 def test_standalone_without_any_optional_service(tmp_path, monkeypatch):
-    for key in ('TINFOIL_API_KEY','WIZARD_ROUTER_URL','WIZARD_ROUTER_GRANT','WIZARD_DELIVERY_URL','WIZARD_DELIVERY_TOKEN','MEETINGS_LLM_KEY'):
+    for key in ('WIZARD_ROUTER_URL','WIZARD_ROUTER_GRANT','WIZARD_DELIVERY_URL','WIZARD_DELIVERY_TOKEN'):
         monkeypatch.delenv(key, raising=False)
     async def test(s,c):
         assert not s.model_configured()
@@ -66,14 +66,12 @@ def test_router_stream_requires_completion_and_never_falls_back(monkeypatch):
     import httpx
     monkeypatch.setenv('WIZARD_ROUTER_URL','http://router')
     monkeypatch.setenv('WIZARD_ROUTER_GRANT','fixture-grant')
-    monkeypatch.setenv('MEETINGS_LLM_URL','http://forbidden-fallback')
-    monkeypatch.setenv('MEETINGS_LLM_MODEL','fixture')
     calls=[]
     def handle(req):
         calls.append(str(req.url))
         assert req.headers['X-Wizard-Grant']=='fixture-grant'
         assert json.loads(req.content)['stream'] is True
-        return httpx.Response(200,text='data: {"type":"delta","text":"provisional"}\n\n')
+        return httpx.Response(200,headers={'Content-Type':'text/event-stream'},text='data: {"type":"delta","text":"provisional"}\n\n')
     real=httpx.AsyncClient
     monkeypatch.setattr(m.httpx,'AsyncClient',lambda **kw:real(transport=httpx.MockTransport(handle),**kw))
     with pytest.raises(RuntimeError,match='provenance'):

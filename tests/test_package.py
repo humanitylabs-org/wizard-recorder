@@ -22,7 +22,7 @@ def wav_bytes(sample=0):
 def run_test(tmp_path, fn):
     os.environ['MEETINGS_DATA'] = str(tmp_path)
     os.environ['TRANSCRIPTION_URL'] = 'http://fixture/v1/audio/transcriptions'
-    for n in ('MEETINGS_LLM_URL','MEETINGS_LLM_MODEL','MEETINGS_ALLOWED_HOSTS','MEETINGS_ALLOWED_ORIGINS'):
+    for n in ('WIZARD_ROUTER_URL','WIZARD_ROUTER_GRANT','MEETINGS_ALLOWED_HOSTS','MEETINGS_ALLOWED_ORIGINS'):
         os.environ.pop(n, None)
     if 'server' in sys.modules:
         s = importlib.reload(sys.modules['server'])

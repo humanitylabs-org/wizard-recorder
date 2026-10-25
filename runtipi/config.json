@@ -12,6 +12,7 @@
     {"type":"text","label":"Shared transcription model","env_variable":"TRANSCRIPTION_MODEL","required":true,"default":"Systran/faster-whisper-small"},
     {"type":"text","label":"Trusted Wizard origins","env_variable":"MEETINGS_ALLOWED_ORIGINS","required":false,"hint":"Comma-separated exact browser origins for your Wizard shell."},
     {"type":"text","label":"Trusted Wizard hostnames","env_variable":"MEETINGS_ALLOWED_HOSTS","required":false,"hint":"Comma-separated Host headers forwarded by your installed Wizard shell."},
+    {"type":"text","label":"Device owner name","env_variable":"MEETINGS_OWNER_NAME","required":false,"hint":"Identifies the recorder in summaries and Ask. A shared microphone can also capture other participants."},
     {"type":"text","label":"Timezone","env_variable":"MEETINGS_TIMEZONE","required":true,"default":"UTC"}
   ], "no_gui": false
 }

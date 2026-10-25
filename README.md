@@ -20,6 +20,8 @@ Open the installed app in Wizard. Start a meeting and grant microphone access; w
 
 Plain notes and transcripts work without a notes model. Optional notes enhancement/Ask uses owner-configured MEETINGS_LLM_URL, MEETINGS_LLM_MODEL and MEETINGS_LLM_KEY. Missing configuration returns an explicit 503 rather than pretending that a model ran. Calendar, Mizel imports and Anarlog imports are intentionally empty in this portable package; the original host service stays unchanged.
 
+Set `MEETINGS_OWNER_NAME` to the device owner's name (also on the Mizel Live Node service when running that adoption). Enhancement, single/cross-meeting Ask and live outline prompts use this identity; unset/blank falls back to “the device owner”, never a guessed participant. “Me” labels the owner's microphone, not every speaker in a shared-room recording. Titles use participant names, not “Me” or “X recording”. No separate owner settings store is introduced.
+
 ## Interfaces and storage
 
 - `GET /healthz`, `GET /openapi.json`.

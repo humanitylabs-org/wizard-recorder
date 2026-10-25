@@ -451,15 +451,32 @@ def transcript_block(segs: list[dict[str, Any]], limit_chars: int = 120_000) -> 
     return out, refs
 
 
+def owner_identity_prompt() -> str:
+    """Track labels identify microphones, not diarized people; never infer the owner."""
+    owner = os.environ.get("MEETINGS_OWNER_NAME", "").strip() or "the device owner"
+    return (
+        f"Recording owner: {owner}. This recording was captured on {owner}'s own device; "
+        f"{owner} is the recorder and the owner of these notes. Lines labelled Me come from {owner}'s microphone. "
+        "In person, one microphone picks up everyone in the room, so other people's speech can also appear under Me. "
+        "Infer individual speakers from content, names, self-introductions and who is addressed, not track labels alone. "
+        f"Refer to {owner} by name (or 'the device owner' if unnamed), never as Me in titles. "
+        f"Never describe the recording as belonging to anyone else or assign {owner}'s identity to another participant. "
+        f"A sentence like 'I am recording with X' (including 'I am doing an SS recording with X') means {owner} "
+        f"is recording and X is the other participant. When naming participants in a title, use '{owner} & X: topic', "
+        "not 'X recording'. Existing generated titles or notes may misattribute speakers; they are not identity evidence. "
+        "Them is the other audio track; Speaker is unlabelled audio. Do not invent an unnamed participant's name."
+    )
+
+
 ENHANCE_SYSTEM = """You turn a meeting transcript plus the user's own rough notes into excellent meeting notes, Granola-style.
 Rules:
 - Output Markdown only. Start with a one-line '# ' title that names what the meeting was actually about.
 - Use exactly these '## ' sections, in order, omitting any that would be empty: {sections}.
 - The user's notes are the skeleton. Every non-empty line of the user's notes must appear VERBATIM somewhere in your output, as its own line or bullet, placed in the most relevant section; expand beneath it with indented sub-bullets from the transcript.
 - Ground every factual bullet in the transcript and cite it with evidence refs like [E3] (one or two per bullet, using the bracketed line numbers given). Never invent names, numbers, dates or commitments.
-- Action items: '- [ ] Owner — task (due if stated) [En]'. Use 'Me' for the user's own commitments.
+- Action items: '- [ ] Owner — task (due if stated) [En]'. Use the recording owner's name for their own commitments.
 - Be concise and specific; prefer concrete nouns and numbers over generalities. No preamble, no closing remarks.
-- Speaker labels: 'Me' is the user's microphone, 'Them' is the other side's audio, 'Speaker' is unlabelled audio."""
+{owner_identity}"""
 
 
 async def run_enhance(mid: str, template: str) -> None:
@@ -474,7 +491,7 @@ async def run_enhance(mid: str, template: str) -> None:
         user = (f"Meeting title: {d['title']}\nDate: {d['started_at']}\n"
                 + (f"Calendar attendees: {', '.join(d['calendar_event']['attendees'])}\n" if d.get("calendar_event") else "")
                 + f"\n<user_notes>\n{notes or '(none)'}\n</user_notes>\n\n<transcript>\n{tx or '(no transcript)'}\n</transcript>")
-        md = await llm([{"role": "system", "content": ENHANCE_SYSTEM.format(sections=sections)},
+        md = await llm([{"role": "system", "content": ENHANCE_SYSTEM.format(sections=sections, owner_identity=owner_identity_prompt())},
                         {"role": "user", "content": user}], max_tokens=4000)
         # Mark the user's own lines so the view can style them as "yours".
         own = {re.sub(r"^[-*#\s]+", "", l).strip().lower() for l in notes.splitlines() if l.strip()}
@@ -516,7 +533,7 @@ async def run_ask(ask_id: str, mid: str, question: str) -> None:
         user = (f"Meeting: {d['title']} ({d['started_at']})\n\n<notes>\n{d['notes'] or '(none)'}\n</notes>\n\n"
                 f"<enhanced_notes>\n{enh or '(none)'}\n</enhanced_notes>\n\n<transcript>\n{tx or '(none)'}\n</transcript>\n\n"
                 f"Question: {question}")
-        answer = await llm([{"role": "system", "content": ASK_SYSTEM}, {"role": "user", "content": user}], max_tokens=1500)
+        answer = await llm([{"role": "system", "content": ASK_SYSTEM + "\n" + owner_identity_prompt()}, {"role": "user", "content": user}], max_tokens=1500)
         with closing(db()) as c:
             c.execute("UPDATE asks SET answer=?, status='done' WHERE id=?", (answer, ask_id))
     except Exception as exc:  # noqa: BLE001
@@ -554,7 +571,7 @@ async def ask_all(question: str) -> dict[str, Any]:
             blocks.append(f"[M{i}] {d['title']} — {d['started_at']}\nNotes:\n{(enh or d['notes'] or '(none)')[:4000]}\n"
                           f"Transcript excerpt:\n{tx[:6000]}")
             cites.append({"ref": f"M{i}", "id": d["id"], "title": d["title"], "started_at": d["started_at"]})
-    answer = await llm([{"role": "system", "content": ASK_SYSTEM},
+    answer = await llm([{"role": "system", "content": ASK_SYSTEM + "\n" + owner_identity_prompt()},
                         {"role": "user", "content": "\n\n".join(blocks) + f"\n\nQuestion: {question}"}], max_tokens=1500)
     used = set(re.findall(r"\[(M\d+)\]", answer))
     return {"answer": answer, "meetings": [c_ for c_ in cites if c_["ref"] in used] or cites[:3]}

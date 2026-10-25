@@ -1,3 +1,4 @@
+import { ownerIdentityPrompt } from './owner-identity.mjs';
 // Mizel private live transcription and summaries; explicit manual Wizard requests only.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -122,13 +123,13 @@ async function summarizeMeeting(mid, { force = false, chain = true } = {}) {
     const askTexts = Object.values(state.asks).filter((a) => a.meetingId === mid).map((a) => a.text).slice(-12);
     const input = {
       activeTopic: active ? { title: active.title, bullets: active.bullets.slice(-24).map((b) => b.text) } : null,
-      transcript: batch.map((x) => ({ startMs: x.start_ms, endMs: x.end_ms, text: x.text })),
+      transcript: batch.map((x) => ({ startMs: x.start_ms, endMs: x.end_ms, speaker: ({me: 'Me', them: 'Them', mixed: 'Speaker'})[x.source] || 'Speaker', text: x.text })),
       saidToArchimedes: askTexts,
     };
     const t0 = Date.now();
     const resp = await provider.client.chat.completions.create({
       model: SUMMARY_MODEL, response_format: { type: 'json_object' }, temperature: 0,
-      messages: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: JSON.stringify(input) }],
+      messages: [{ role: 'system', content: SUMMARY_PROMPT + '\n' + ownerIdentityPrompt() }, { role: 'user', content: JSON.stringify(input) }],
     });
     const delta = parseSummaryDelta(resp.choices[0]?.message?.content || '');
     const starts = batch.map((x) => x.start_ms || 0);

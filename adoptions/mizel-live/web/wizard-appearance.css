@@ -32,7 +32,7 @@ html[data-wz-hosted] :is(.doc-toolbar, .side-foot) {
 html[data-wz-hosted] .composer:not(.inline) { background: none; }
 /* Floating things: the shell's sheet material. */
 html[data-wz-hosted] :is(.w-menu, .w-toast, .cite-tip, .palette, .sheet, .panel, .composer-box, .recorder, .live-card, .live-words, .who-hint) {
-  background: var(--wz-overlay); -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
+  background: linear-gradient(var(--wz-overlay, transparent), var(--wz-overlay, transparent)), var(--wz-panel, var(--w-bg-raised)); -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
 }
 html[data-wz-hosted] .composer.inline .composer-box { background: var(--wz-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 html[data-wz-hosted] .who-hint { color: var(--wz-text); }

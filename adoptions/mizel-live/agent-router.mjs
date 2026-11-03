@@ -1,3 +1,5 @@
+import { ownerIdentityPrompt } from './owner-identity.mjs';
+
 // Agent router: the owner picks which Wizard agent a recording (or a manual ask) goes to.
 // Nothing here runs on its own. A transcript leaves Mizel only when the owner taps Send.
 export const MAIN_AGENT = 'hermes';
@@ -40,7 +42,7 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
   const lines = [];
   const ask = String(note || '').trim();
   lines.push(ask || `This Mizel.ai recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
-  lines.push('', '---', '', `# ${title}`);
+  lines.push('', ownerIdentityPrompt(), '', '---', '', `# ${title}`);
   const meta = [bangkok(meeting?.started_at) && `${bangkok(meeting.started_at)} (Bangkok)`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Mizel.ai'].filter(Boolean);
   lines.push(meta.join(' · '));
   const attendees = meeting?.calendar_event?.attendees;
@@ -62,7 +64,8 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
   if (!segments.length) lines.push('(No transcript yet.)');
   let used = 0; let cut = 0;
   for (const s of segments) {
-    const speaker = s.speaker ? `${s.speaker}: ` : '';
+    const speakerName = s.speaker || ({me: 'Me', them: 'Them', mixed: 'Speaker'})[s.source];
+    const speaker = speakerName ? `${speakerName}: ` : '';
     const row = `[${stamp(s.start_ms)}] ${speaker}${s.text.trim()}`;
     if (used + row.length > TRANSCRIPT_CAP) { cut++; continue; }
     used += row.length + 1; lines.push(row);

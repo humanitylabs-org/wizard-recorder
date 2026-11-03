@@ -140,6 +140,23 @@ try:
     result = json.loads((out / 'browser-recovery.json').read_text())
     if result.get('passed') is not True or len(result['tests']) != 2 or result['pageErrors']:
         raise RuntimeError('Complete desktop and narrow browser verdict required')
+    if {test['viewport'] for test in result['tests']} != {'desktop', 'phone'}:
+        raise RuntimeError('Both exact viewport cases required')
+    for test in result['tests']:
+        if test.get('passed') is not True or not test.get('causalProof') or not test.get('custody'):
+            raise RuntimeError('Causal recovery and final custody proof required for ' + test['viewport'])
+        if test['faults'] != 1 or test['bridgeSockets'] != 1 or test['violations'] != 0:
+            raise RuntimeError('Single genuine fault on same live bridge required')
+        for name in ['outage', 'nebula', 'grove']:
+            if not (out / (test['viewport'] + '-' + name + '.png')).is_file():
+                raise RuntimeError('Missing screenshot: ' + test['viewport'] + '-' + name)
+    ledger = [json.loads(line) for line in (out / 'causal-ledger.jsonl').read_text().splitlines()]
+    for test in result['tests']:
+        retained = [entry for entry in ledger if entry['viewport'] == test['viewport']]
+        if [entry['seq'] for entry in retained] != list(range(len(retained))):
+            raise RuntimeError('Causal ledger continuity failure')
+        if [dict(viewport=test['viewport'], **entry) for entry in test['journal']] != retained:
+            raise RuntimeError('Snapshot/append-only causal ledger mismatch')
     receipt['passed'] = True
 except BaseException as error:
     receipt['failure'] = {'type': type(error).__name__, 'message': str(error)}

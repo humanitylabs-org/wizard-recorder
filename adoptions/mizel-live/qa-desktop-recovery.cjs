@@ -11,7 +11,25 @@ const {chromium}=require(process.env.QA_PLAYWRIGHT);
 const base=__dirname,shared=process.env.QA_SHARED_STATIC,out=process.env.QA_OUT;
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const cert=fs.readFileSync(process.env.QA_TLS_CERT),key=fs.readFileSync(process.env.QA_TLS_KEY);
-const report={syntheticOnly:true,productionAcceptance:false,providerRouteChanged:false,tests:[],source:{},warnings:[],pageErrors:[]};
+const report={syntheticOnly:true,productionAcceptance:false,providerRouteChanged:false,tests:[],source:{},warnings:[],pageErrors:[],checkpoints:[],requests:[],console:[],input:[]};
+const retain=(list,item)=>{if(list.length<500)list.push(item);};
+const persist=()=>fs.writeFileSync(path.join(out,'browser-recovery.json'),JSON.stringify(report,null,2)+'\n');
+async function bounded(promise,ms){let t;try{return await Promise.race([promise,new Promise((_,reject)=>{t=setTimeout(()=>reject(Error('Diagnostic deadline exceeded')),ms);})]);}finally{clearTimeout(t);}}
+let currentPage=null,currentViewport=null;
+async function checkpoint(label){
+ const name=`${currentViewport}-${label}`,entry={name,at:Date.now(),syntheticOnly:true};
+ // Save partial JSON before each await; retain the page on any failed original assertion.
+ report.checkpoints.push(entry);persist();
+ if(currentPage&&!currentPage.isClosed()){
+  try{entry.ui=await bounded(currentPage.evaluate(()=>{
+   const f=document.querySelector('#app'),w=f?.contentWindow,d=w?.document;
+   const box=el=>{if(!el)return null;const r=el.getBoundingClientRect(),s=getComputedStyle(el);return {x:r.x,y:r.y,width:r.width,height:r.height,display:s.display,visibility:s.visibility,transform:s.transform,pointerEvents:s.pointerEvents,hidden:el.hidden,disabled:el.disabled===true};};
+   const button=d?.querySelector(innerWidth>700?'#btn-new':'#btn-new-mobile'),r=button?.getBoundingClientRect();
+   return {hostReady:!!window.WizAppServices,frame:box(f),url:w?.location.href,hosted:w?.WizardApp?.hosted===true,domainReady:!!w?.mizel,viewport:{width:w?.innerWidth,height:w?.innerHeight},newButton:box(button),hitTarget:r?d.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')?.id:null,inputs:w?.__qaInputs||[],pill:box(d?.querySelector('#pill')),buttons:[...(d?.querySelectorAll('button')||[])].map(b=>({id:b.id,label:b.getAttribute('aria-label')||b.innerText,hidden:b.hidden,disabled:b.disabled})),text:d?.body?.innerText?.slice(0,12000),capture:window.WizAppCapture?.getState?.()};
+  }),8000);}catch(e){entry.uiError=e.message;}persist();
+  try{entry.screenshot=name+'.png';await currentPage.screenshot({path:path.join(out,entry.screenshot),timeout:8000});}catch(e){entry.screenshotError=e.message;}persist();
+ }
+}
 for(const p of ['web/app.js','server.mjs','provider.js'])report.source[p]=hash(fs.readFileSync(path.join(base,p)));
 for(const p of ['app-capture.js','app-client.js','app-services.js','appearance-host.js','skins.css'])report.source['shared/'+p]=hash(fs.readFileSync(path.join(shared,p)));
 let browser;const sessions=new Set(),timers=new Set(),sockets=new Set();let mode=null;
@@ -60,7 +78,7 @@ const web=http.createServer(async(req,res)=>{
    assert.equal(wav.toString('ascii',0,4),'RIFF');assert.equal(wav.readUInt32LE(24),16000);assert.equal(wav.readUInt16LE(22),1);assert.equal(wav.readUInt16LE(34),16);
    const item={source:u.searchParams.get('source'),seq:+u.searchParams.get('seq'),start_ms:+u.searchParams.get('start_ms'),wav};const prior=store.chunks.find(c=>c.source===item.source&&c.seq===item.seq);if(prior)assert(prior.wav.equals(wav));else store.chunks.push(item);
    m.audio.tracks=[{source:'me',chunks:store.chunks.filter(x=>x.source==='me').length}];m.duration_ms=Math.max(m.duration_ms,item.start_ms+(wav.length-44)/32);
-   return json({ok:true,bytes:wav.length,seq:item.seq,source:item.source});
+   return json({stored:true,ok:true,bytes:wav.length,seq:item.seq,source:item.source});
   }
   if(route.endsWith('/stop')){m.status='ready';return json(m);}
   return json({meetings:[],events:[],asks:[],segments:[],pending:0});
@@ -97,10 +115,22 @@ web.on('upgrade',(req,socket,head)=>{if(new URL(req.url,'http://localhost').path
   // No page (including accidental APIs) can leave this synthetic loopback origin.
   const origin=`http://127.0.0.1:${web.address().port}`;
   await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
-  const page=await context.newPage();page.on('pageerror',e=>report.pageErrors.push({viewport:size.name,message:e.message}));
+  const page=await context.newPage();currentPage=page;currentViewport=size.name;
+  page.on('pageerror',e=>{retain(report.pageErrors,{viewport:size.name,message:e.message});persist();});
+  page.on('console',m=>{if(['warning','error'].includes(m.type())){retain(report.console,{viewport:size.name,type:m.type(),text:m.text().slice(0,2000)});persist();}});
+  page.on('request',r=>{retain(report.requests,{viewport:size.name,event:'request',method:r.method(),url:r.url(),at:Date.now()});persist();});
+  page.on('response',r=>{retain(report.requests,{viewport:size.name,event:'response',method:r.request().method(),url:r.url(),status:r.status(),at:Date.now()});persist();});
+  page.on('requestfailed',r=>{retain(report.requests,{viewport:size.name,event:'failed',url:r.url(),error:r.failure()?.errorText,at:Date.now()});persist();});
+  await context.addInitScript(()=>{window.__qaInputs=[];for(const name of ['pointerdown','click'])addEventListener(name,e=>{if(window.__qaInputs.length<30)window.__qaInputs.push({event:name,trusted:e.isTrusted,target:e.target.closest?.('button')?.id||e.target.id||e.target.tagName});},true);});
   await page.goto(origin);const frame=page.frameLocator('#app');
+  await checkpoint('loaded-before-readiness');
+  // The old harness waited for attached HTML, not the synchronous host connection,
+  // module boot or the initial shared-capture ownership/recovery pass.
+  await page.waitForFunction(()=>{const w=document.querySelector('#app')?.contentWindow,s=window.WizAppCapture?.getState?.();return !!w?.mizel&&w.WizardApp?.hosted===true&&s?.nativeRegistryReady===true&&s.nativeOwnershipReady===true&&!s.active&&!s.hold&&!s.error;},{},{timeout:15000});
+  await checkpoint('ready-before-input');
   await frame.locator('#btn-new').waitFor({state:'attached'});const appFrame=page.frames().find(f=>f.url().includes('/mizel-live/'));assert.equal(await appFrame.evaluate(()=>innerWidth),size.width);
   const button=size.name==='desktop'?frame.locator('#btn-new'):frame.locator('#btn-new-mobile');await button.click();
+  await checkpoint('after-start-click-before-stop-assertion');
   await frame.getByRole('button',{name:'Stop recording',exact:true}).waitFor({timeout:20000});
   await frame.getByText('Live words dropped out, recording continues. Reconnecting…',{exact:false}).waitFor({timeout:15000});
   await page.screenshot({path:path.join(out,size.name+'-outage.png')});
@@ -125,7 +155,7 @@ web.on('upgrade',(req,socket,head)=>{if(new URL(req.url,'http://localhost').path
   report.tests.push(mode);await context.close();
  }
  assert.equal(report.pageErrors.length,0);report.passed=true;
-})().catch(e=>{report.failure={name:e.name,message:e.message,stack:e.stack};process.exitCode=1;}).finally(async()=>{
+})().catch(async e=>{report.failure={name:e.name,message:e.message,stack:e.stack};process.exitCode=1;persist();await checkpoint('failed-before-cleanup');}).finally(async()=>{
  try{await browser?.close();}catch(_){}for(const s of sessions)s.close();for(const t of timers){clearTimeout(t);clearInterval(t);}for(const s of sockets)s.terminate();for(const s of livews.clients)s.terminate();peer.close();livews.close();tls.close();web.close();
  fs.writeFileSync(path.join(out,'browser-recovery.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));setTimeout(()=>process.exit(process.exitCode||0),200).unref();
 });

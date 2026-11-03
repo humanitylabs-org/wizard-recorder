@@ -26,7 +26,7 @@ for relative, expected in manifest['files'].items():
 node = '/srv/ci-runners/tools/node22/bin/node'
 env = dict(os.environ, QA_OUT=str(out), QA_SHARED_STATIC=str(stage / 'shared-static'),
            QA_TLS_CERT=str(stage / 'fixture-cert.pem'), QA_TLS_KEY=str(stage / 'fixture-key.pem'),
-           QA_PLAYWRIGHT=str(stage / 'browser-node-modules/playwright'),
+           QA_PLAYWRIGHT=str(stage / 'browser-node-modules/playwright'), NODE_PATH=str(stage / 'browser-node-modules'),
            QA_CHROMIUM='/home/james/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome',
            QA_SYNTHETIC_WAV=str(stage / 'synthetic.wav'), PYTHONDONTWRITEBYTECODE='1', TMPDIR=str(stage / 'scratch'))
 receipt = {'synthetic_only': True, 'source_revision': manifest['source_revision'], 'productionAcceptance': False,

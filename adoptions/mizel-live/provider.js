@@ -80,6 +80,9 @@ class NativeRealtimeTranscriber {
       });
       stream.on('transcription.done', (event) => this.done(stream, event));
       stream.on('error', (error) => this.failed(stream, error));
+      // OpenAIRealtimeWS forwards socket errors, but not socket close. A peer/proxy
+      // close without an error otherwise leaves a dead stream installed forever.
+      stream.socket.on('close', () => this.failed(stream, new Error('Tinfoil realtime connection closed before transcription completed')));
     }).catch((error) => {
       this.opening = null;
       // `open()` turns this terminal state into a rejected startup promise. Every later
@@ -128,8 +131,9 @@ class NativeRealtimeTranscriber {
   done(stream, event) {
     if (stream !== this.stream || this.closed) return;
     const text = event.text || '';
-    stream.close();
     this.stream = null; this.ready = false; this.finalizing = false; this.activeHasAudio = false;
+    // Retire ownership before intentional close (including synchronous adapters).
+    stream.close();
     this.handlers.completed(text);
     if (this.pending.length > 0) void this.ensureOpen();
     else { this.commitQueued = false; this.notifyIdle(); }
@@ -143,7 +147,8 @@ class NativeRealtimeTranscriber {
   }
   finishEmptyStream() {
     if (!this.stream || this.activeHasAudio || this.finalizing) return;
-    this.stream.close(); this.stream = null; this.ready = false; this.notifyIdle();
+    const stream = this.stream; this.stream = null; this.ready = false;
+    stream.close(); this.notifyIdle();
   }
   isIdle() { return !this.stream && !this.opening && this.pending.length === 0; }
   notifyIdle() {

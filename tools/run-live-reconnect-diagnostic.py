@@ -11,8 +11,8 @@ import time
 stage = Path(__file__).resolve().parents[2]
 if socket.gethostname() != 'forum' or not str(stage).startswith('/srv/work/'):
     raise SystemExit('forum staged source required')
-if not os.environ.get('WIZARD_HEAVY_LOCK_FD'):
-    raise SystemExit('durable worker admission required')
+if os.environ.get('WIZARD_WORKER_LANE') != 'light':
+    raise SystemExit('native light-lane worker required')
 source = stage / 'source'
 out = stage / 'evidence'
 out.mkdir(mode=0o700, exist_ok=True)

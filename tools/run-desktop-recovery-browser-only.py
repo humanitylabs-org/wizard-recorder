@@ -35,6 +35,9 @@ inherited = json.loads((stage / 'inherited-evidence.json').read_text())
 for relative, expected in inherited['files'].items():
     if sha(stage / relative) != expected:
         raise SystemExit('inherited evidence mismatch: ' + relative)
+for relative, expected in inherited['product_files'].items():
+    if sha(stage / relative) != expected:
+        raise SystemExit('inherited product-byte mismatch: ' + relative)
 old_receipt = json.loads((stage / 'inherited/runner-receipt.json').read_text())
 for label, expected_exit in [('fault-before', 1), ('fault-after', 0), ('existing-contracts', 0)]:
     step = next(s for s in old_receipt['steps'] if s['step'] == label)
@@ -94,9 +97,18 @@ def run(label, argv, timeout=30):
             if proc is not None:
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
-                    step['process_group_cleaned'] = True
+                    step['process_group_signal_sent'] = True
                 except ProcessLookupError:
-                    step['process_group_cleaned'] = True
+                    step['process_group_signal_sent'] = False
+                step['process_group_absent'] = False
+                for _ in range(10):
+                    try:
+                        os.killpg(proc.pid, 0)
+                    except ProcessLookupError:
+                        step['process_group_absent'] = True
+                        break
+                    time.sleep(0.1)
+                step['direct_child_reaped'] = proc.returncode is not None
             log.seek(0, 2)
             size = log.tell()
             step['log_bytes'] = size
@@ -113,6 +125,8 @@ def run(label, argv, timeout=30):
             save()
     if step.get('exit_code') != 0:
         raise RuntimeError('Synthetic browser continuation step failed: ' + label)
+    if not step.get('direct_child_reaped') or not step.get('process_group_absent'):
+        raise RuntimeError('Owned process-group cleanup uncertain: ' + label)
     return data.decode(errors='replace')
 try:
     actual = run('browser-version', [str(executable), '--version']).strip()

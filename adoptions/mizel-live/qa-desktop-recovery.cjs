@@ -93,7 +93,7 @@ const web=http.createServer(async(req,res)=>{
    assert.equal(wav.toString('ascii',0,4),'RIFF');assert.equal(wav.readUInt32LE(24),16000);assert.equal(wav.readUInt16LE(22),1);assert.equal(wav.readUInt16LE(34),16);
    const item={source:u.searchParams.get('source'),seq:+u.searchParams.get('seq'),start_ms:+u.searchParams.get('start_ms'),wav};const prior=store.chunks.find(c=>c.source===item.source&&c.seq===item.seq);if(prior)assert(prior.wav.equals(wav));else store.chunks.push(item);
    m.audio.tracks=[{source:'me',chunks:store.chunks.filter(x=>x.source==='me').length}];m.duration_ms=Math.max(m.duration_ms,item.start_ms+(wav.length-44)/32);
-   journal(store.run,'custody.chunk',{source:item.source,seq:item.seq,start_ms:item.start_ms,pcmBytes:wav.length-44,sha256:hash(wav),duplicate:!!prior});
+   journal(store.run,'custody.chunk',{source:item.source,chunkSeq:item.seq,start_ms:item.start_ms,pcmBytes:wav.length-44,sha256:hash(wav),duplicate:!!prior});
    return json({stored:true,ok:true,bytes:wav.length,seq:item.seq,source:item.source});
   }
   if(route.endsWith('/stop')){m.status='ready';return json(m);}

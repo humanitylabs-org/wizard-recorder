@@ -1367,10 +1367,12 @@ async function reattachShared(failed = null) {
   if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
   let adopted = null;
   try {
-    const pending=await WizardApp.capture.pending();
+    let current=WizardApp.capture.current();
+    // Active custody is already positive proof; pending may reject while this exact take is live.
+    const pending=current ? [] : await WizardApp.capture.pending();
     // Re-entrant recovery/Retry/Stop cannot replace an engine installed by another waiter.
     if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
-    const current=WizardApp.capture.current();
+    current=WizardApp.capture.current();
     const take=current || pending.find(t=>t.meta?.captureRecovery?.resumable) || pending[0];
     let hint;try{hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');}catch{}
     // No guessed meeting ownership: legacy metadata may use only our exact persisted capture hint.
@@ -1422,7 +1424,11 @@ async function stopRecording({ reason = 'user' } = {}) {
     if (await clearEmptyFailedStart(r)) { if (state.rec === r) endRecSession(); }
     else if (state.rec === r && !failedStartOwnsMemory(r)) {
       const adopted = await reattachShared(r);
-      if (adopted && state.rec === adopted && ['recording','error'].includes(adopted.phase)) return stopRecording({reason});
+      if (adopted && state.rec === adopted) {
+        // This Stop belongs to the failed meeting, not a different take discovered during recovery.
+        if (adopted.meetingId !== r.meetingId) { navigate(adopted.meetingId); return; }
+        if (['recording','error'].includes(adopted.phase)) return stopRecording({reason});
+      }
     }
     return;
   }

@@ -5,20 +5,21 @@ import vm from 'node:vm';
 const source=readFileSync(process.env.MIZEL_APP_SOURCE || new URL('./web/app.js',import.meta.url),'utf8');
 const slice=(a,b)=>{const i=source.indexOf(a),j=source.indexOf(b,i);assert(i>=0&&j>i,a);return source.slice(i,j)};
 function fixture({start, pending=async()=>[], current=()=>null}={}) {
- const acked=new Set(),engines=[],calls=[],holds=new Set(),state={current:{id:'synthetic',title:'Synthetic',status:'recording'},rec:null};
+ const acked=new Set(),engines=[],calls=[],stops=[],apiStops=[],navigations=[],holds=new Set(),state={current:{id:'synthetic',title:'Synthetic',status:'recording'},rec:null};
  const ctx={state,WizardApp:{capture:{current:()=>{const r=current();return r&&!acked.has(r.id)?r:null},pending:async()=>(await pending()).filter(r=>!acked.has(r.id))},update:{hold(reason){holds.add(reason);return {release(){calls.push('release');holds.delete(reason)}}}}},
   deletingMeetings:new Set(),prefs:{},live:{start(){},stop(){}},els:{notepad:{hidden:true},docPane:{dataset:{}}},mobileMQ:{matches:false},
-  discardWarm(){calls.push('release-warm')},setCurrent(v){state.current=v},isImported:()=>false,navigate(){calls.push('navigate')},
+  discardWarm(){calls.push('release-warm')},setCurrent(v){state.current=v},isImported:()=>false,navigate(id){calls.push('navigate');navigations.push(id)},
   setInterval:()=>1,clearInterval(){},clearTimeout(){},document:{querySelector:()=>null},errMsg:e=>e.message,onNativeState(){},sessionStorage:{getItem:()=>null},
-  SharedMeeting:class {constructor(id,cbs,opts={}){engines.push(this);this.meetingId=id;this.captureId=opts.captureId;this.info={};this.uploader={pending:0};this.sent=new Set();this.finalSeq={};this.detach=()=>calls.push('detach');this.abort=()=>calls.push('FORBIDDEN abort');this.stop=()=>{calls.push('stop');return {meta:{}}};this.acknowledge=()=>{acked.add(this.captureId);calls.push('ack')};this.uploader.drain=async()=>{};}async start(){if(start)await start(this);else throw Error('Synthetic permission rejection')}},
-  API:{stop:async()=>({id:'synthetic'})},loadMeeting:async()=>{},loadMeetings(){},toast(){},retryRecording(){}};
+  SharedMeeting:class {constructor(id,cbs,opts={}){engines.push(this);this.meetingId=id;this.captureId=opts.captureId;this.info={};this.uploader={pending:0};this.sent=new Set();this.finalSeq={};this.detach=()=>calls.push('detach');this.abort=()=>calls.push('FORBIDDEN abort');this.stop=()=>{calls.push('stop');stops.push(this.meetingId);return {meta:{}}};this.acknowledge=()=>{acked.add(this.captureId);calls.push('ack')};this.uploader.drain=async()=>{};}async start(){if(start)await start(this);else throw Error('Synthetic permission rejection')}},
+  API:{stop:async id=>{apiStops.push(id);return {id}}},loadMeeting:async()=>{},loadMeetings(){},toast(){},retryRecording(){}};
  for(const n of ['updateLevel','renderPillQueue','renderDoc','renderRecBanner','renderPill','renderAskBar','renderHeader','tickPillClock','schedulePoll','notifyNative','showParticipantsHint'])ctx[n]=()=>{};
  vm.createContext(ctx);
  vm.runInContext(slice('async function clearEmptyFailedStart(', '// A recording left paused')+slice('function recordingSaveFailed(', 'async function finishStop(')+slice('function endRecSession()', 'const BAR_SHAPE =')+';globalThis.x={beginRecording,stopRecording,clearEmptyFailedStart};',ctx);
- vm.runInContext(slice('async function reattachShared(', 'async function toggleSystemAudio('),ctx);
+ vm.runInContext(slice('async function retryRecording()', 'async function toggleSystemAudio('),ctx);
+ ctx.x.reattachShared=ctx.reattachShared;ctx.x.retryRecording=ctx.retryRecording;
  const unloadLine=source.split('\n').find(line=>line.includes("window.addEventListener('beforeunload'"));assert(unloadLine);
  ctx.window={addEventListener:(_name,fn)=>ctx.unload=fn};ctx.flushNotes=()=>calls.push('flush-notes');vm.runInContext(unloadLine,ctx);
- return {engines,ctx,state,calls,holds,x:ctx.x};
+ return {engines,ctx,state,calls,stops,apiStops,navigations,holds,x:ctx.x};
 }
 test('failed empty Start holds synchronously, then releases only its own hold; Stop clears the error UI',async()=>{
  let reject;const f=fixture({start:()=>new Promise((_,r)=>reject=r)});
@@ -108,4 +109,75 @@ test('Stop adoption awaiting resume cannot stop or mutate a replacement controll
   const next={meetingId:'replacement',phase:'recording',engine:{captureId:'different'}};f.state.rec=next;
   resume();await work;assert.equal(f.state.rec,next);assert.equal(next.phase,'recording');
   assert(!f.calls.includes('stop'));assert(!f.calls.includes('ack'));assert(!f.calls.includes('release'));
+});
+
+test('frame remount adopts positive current even when pending would throw capture_custody_uncertain',async()=>{
+  let pendingCalls=0;const take={id:'active',meta:{meetingId:'synthetic'}};
+  const f=fixture({current:()=>take,pending:async()=>{pendingCalls++;throw Object.assign(Error('uncertain'),{code:'capture_custody_uncertain'})},start:async e=>{e.session={}}});
+  await f.x.reattachShared();assert.equal(f.state.rec?.engine.captureId,take.id);assert.equal(f.state.rec.phase,'recording');
+  assert.equal(pendingCalls,0);assert.equal(f.engines.length,1);assert(f.holds.size);assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);
+});
+
+// Execute the selected candidate shell's genuine pending/current bodies, not a permissive [] mock.
+// Like the existing real-ack contract test, enabled by the acceptance worker's pinned source path.
+function shellCustody(mode='active',meetingId='synthetic') {
+  const sdk=readFileSync(process.env.WIZARD_CAPTURE_SOURCE,'utf8');
+  const take={id:'shell-retained',appId:'mizel',status:'recording',meta:{meetingId}};
+  const c={validate(){},ready:Promise.resolve(),recover:async()=>{},rows:async()=>[take],result:async r=>r,
+    active:mode==='active'?{row:take,phase:'recording',engine:{}}:null,recoveryLive:new Set(mode==='recoveryLive'?[take.id]:[]),
+    ownedRows:new Map([[take.id,take]]),ownershipLoaded:true,recoveryError:null,unknownMeetingActive:false,
+    fail:(code,message)=>Object.assign(Error(message),{code})};
+  const a=sdk.indexOf('  async function pending(appId)'),b=sdk.indexOf('  async function ack(',a);
+  const i=sdk.indexOf('    current(appId)'),j=sdk.indexOf('    configureNativeBridge(',i);
+  assert(a>=0&&b>a&&i>=0&&j>i);vm.createContext(c);
+  vm.runInContext(sdk.slice(a,b)+';globalThis.capture={'+sdk.slice(i,j)+'};',c);
+  let pendingCalls=0;
+  return {take,current:()=>c.capture.current('mizel'),pending:()=>{pendingCalls++;return c.pending('mizel')},get pendingCalls(){return pendingCalls}};
+}
+if(process.env.WIZARD_CAPTURE_SOURCE){
+  for(const mode of ['active','recoveryLive'])test(`genuine shell ${mode}: frame remount reattaches while pending rejects active custody`,async()=>{
+    const shell=shellCustody(mode);await assert.rejects(shell.pending(),e=>e.code==='capture_custody_uncertain');
+    assert.equal(shell.current().id,shell.take.id);const before=shell.pendingCalls;
+    const f=fixture({...shell,start:async e=>{assert.equal(e.captureId,shell.take.id);e.session={}}});
+    await f.x.reattachShared();assert.equal(f.state.rec?.phase,'recording');assert.equal(f.state.rec.engine.captureId,shell.take.id);
+    assert.equal(shell.pendingCalls,before);assert.equal(f.engines.length,1);assert(f.holds.size);assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);
+  });
+  for(const action of ['Retry','Stop'])test(`genuine shell active: failed Start ${action} adopts the same meeting despite rejecting pending`,async()=>{
+    const shell=shellCustody();await assert.rejects(shell.pending(),e=>e.code==='capture_custody_uncertain');
+    let started=false,attempts=0;const f=fixture({current:()=>started?shell.current():null,pending:shell.pending,start:async e=>{
+      if(++attempts===1){started=true;throw Error('Lost shell reply')}
+      assert.equal(e.captureId,shell.take.id);e.session={};
+    }});
+    await f.x.beginRecording();const failed=f.state.rec,before=shell.pendingCalls;assert(f.holds.size);
+    if(action==='Retry')await f.x.retryRecording();else await f.x.stopRecording();
+    assert.equal(attempts,2);assert.notEqual(f.state.rec,failed);assert.equal(shell.pendingCalls,before);
+    assert(!f.calls.includes('FORBIDDEN abort'));
+    if(action==='Retry'){assert.equal(f.state.rec.phase,'recording');assert.equal(f.state.rec.meetingId,'synthetic');assert(f.holds.size);assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);}
+    else {assert.equal(f.state.rec,null);assert.deepEqual(f.stops,['synthetic']);assert.deepEqual(f.apiStops,['synthetic']);assert(f.calls.includes('ack'));assert.equal(f.holds.size,0);}
+  });
+  test('genuine shell active: Stop on failed B adopts A without stopping A until explicit second Stop',async()=>{
+    const shell=shellCustody('active','meeting-A');await assert.rejects(shell.pending(),e=>e.code==='capture_custody_uncertain');
+    const f=fixture({...shell,start:async e=>{if(!e.captureId)throw Error('Busy');e.session={}}});
+    await f.x.beginRecording();await f.x.stopRecording();
+    assert.equal(f.state.rec?.meetingId,'meeting-A');assert.equal(f.state.rec.phase,'recording');assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);
+    assert.deepEqual(f.navigations,['meeting-A']);assert(f.holds.size);assert(!f.calls.includes('ack'));assert(!f.calls.includes('release'));
+    await f.x.stopRecording();assert.deepEqual(f.stops,['meeting-A']);assert.deepEqual(f.apiStops,['meeting-A']);assert.equal(f.state.rec,null);
+  });
+}
+// Isolate N2 even against the old controller, whose N1 otherwise hides this accidental Stop.
+test('cross-meeting Stop adoption never transfers the first Stop intent to a different meeting',async()=>{
+  const f=fixture({current:()=>({id:'take-A',meta:{meetingId:'meeting-A'}}),start:async e=>{if(!e.captureId)throw Error('Busy');e.session={}}});
+  await f.x.beginRecording();await f.x.stopRecording();
+  assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);assert.equal(f.state.rec.meetingId,'meeting-A');assert.equal(f.state.rec.phase,'recording');
+  assert.deepEqual(f.navigations,['meeting-A']);assert(f.holds.size);assert(!f.calls.includes('ack'));assert(!f.calls.includes('release'));
+});
+for(const replace of [false,true])test(`reattach awaiting pending rechecks ${replace?'controller identity':'new current capture'} before adoption`,async()=>{
+  let current=null,release;const f=fixture({current:()=>current,pending:()=>new Promise(r=>release=r),start:async e=>{e.session={}}});
+  const work=f.x.reattachShared();assert(release);
+  const next={meetingId:'replacement',phase:'recording',engine:{captureId:'new'}};
+  if(replace)f.state.rec=next;else current={id:'new-active',meta:{meetingId:'synthetic'}};
+  release([{id:'old-pending',meta:{meetingId:'old'}}]);await work;
+  if(replace){assert.equal(f.state.rec,next);assert.equal(f.engines.length,0);}
+  else {assert.equal(f.state.rec.engine.captureId,'new-active');assert.equal(f.state.rec.meetingId,'synthetic');}
+  assert.deepEqual(f.stops,[]);assert.deepEqual(f.apiStops,[]);
 });

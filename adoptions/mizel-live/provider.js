@@ -1,3 +1,4 @@
+import { ownerIdentityPrompt, noAttributionPrompt } from './owner-identity.mjs';
 import { TinfoilAI } from 'tinfoil';
 
 export class TinfoilProvider {
@@ -16,7 +17,7 @@ export class TinfoilProvider {
       model: this.summaryModel, response_format: { type: 'json_object' }, temperature: 0,
       messages: [{
         role: 'system',
-        content: 'You maintain an append-only meeting summary. Return only JSON {"topicChanged":boolean,"title":string,"newBullets":[{"text":string,"atMs":integer}]}. "title" names the topic of the newest transcript lines. Set topicChanged=true only when discussion has moved to a different topic than activeTopic.title. Each new bullet must contain concise new "text" and an "atMs" copied exactly from the startMs of the transcript line that best supports it. Return [] when nothing is new. Never restate or rewrite existing bullets.',
+        content: 'You maintain an append-only meeting summary. Return only JSON {"topicChanged":boolean,"title":string,"newBullets":[{"text":string,"atMs":integer}]}. "title" names the topic of the newest transcript lines. Set topicChanged=true only when discussion has moved to a different topic than activeTopic.title. Each new bullet must contain concise new "text" and an "atMs" copied exactly from the startMs of the transcript line that best supports it. Return [] when nothing is new. Never restate or rewrite existing bullets.' + '\n' + ownerIdentityPrompt() + '\n' + noAttributionPrompt(),
       }, { role: 'user', content: JSON.stringify(input) }],
     });
     return parseSummaryDelta(response.choices[0]?.message?.content || '');

@@ -1245,11 +1245,29 @@ function showParticipantsHint() {
   els.pill.parentElement.append(el);
   setTimeout(() => { el.classList.add('is-leaving'); setTimeout(() => el.remove(), 400); }, PARTICIPANTS_HINT_MS);
 }
+// A rejected Start is not evidence of an empty recorder: it may have obtained a session before
+// observer/storage setup failed. Only the app can prove its own memory is empty, and shared custody
+// must independently report no current/pending take. Never cancel, acknowledge or discard on error.
+async function clearEmptyFailedStart(r) {
+  const retained = () => {
+    const e = r?.engine;
+    return !!(e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
+  };
+  if (!r || state.rec !== r || r.phase !== 'error' || retained()) return false;
+  try {
+    if (WizardApp.capture.current() || (await WizardApp.capture.pending()).length) return false;
+    // The read yielded: a new Start, recovered session or buffered chunk wins over this old cleanup.
+    if (state.rec !== r || r.phase !== 'error' || retained() || WizardApp.capture.current()) return false;
+  } catch { return false; } // Unknown custody stays held and retryable.
+  r.engine?.detach?.(); r.engine = null; r.emptyStartProven = true;
+  recordingUpdateHold?.release(); recordingUpdateHold = null; stopPillClock();
+  return true;
+}
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
   const m = state.current; if (!m || deletingMeetings.has(m.id)) return;
   if (state.rec && state.rec.phase !== 'error') return;
   if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
-  if (state.rec) endRecSession();
+  if (state.rec) { if (!await clearEmptyFailedStart(state.rec)) return; endRecSession(); }
   const cbs = {
     onLevel: (lvl) => updateLevel(lvl),
     onQueue: () => renderPillQueue(),
@@ -1263,7 +1281,7 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
     offsetMs=Math.max(m.duration_ms||0,...(m.segments||[]).map(s=>s.end_ms||0),(seqBase.me||0)*5000); }
   const engine=new SharedMeeting(m.id,cbs,{warm,seqBase,offsetMs});
   state.rec = { meetingId: m.id, title: m.title, engine, phase: 'starting', paused: false, error: null };
-  renderDoc(); renderRecBanner();
+  renderDoc(); renderRecBanner(); startPillClock();
   try {
     await engine.start({ systemAudio: prefs.systemAudio });
     if (state.rec?.engine !== engine) return;
@@ -1274,14 +1292,17 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
     if (state.current?.id === m.id && state.current.status !== 'recording') setCurrent({ ...state.current, status: 'recording' });
     if (state.current?.id === m.id && !isImported(m) && !els.notepad.hidden && !mobileMQ.matches) els.notepad.focus({ preventScroll: true });
   } catch (e) {
-    try { await engine.abort(); } catch { /* ignore */ }
+    // Start can reject after obtaining a live session. Retain it for Stop/Retry, never abort audio.
+    discardWarm(engine.warm); engine.warm = null;
     if (state.rec?.engine !== engine) return;
-    state.rec.phase = 'error'; state.rec.engine = null;
-    state.rec.error = e?.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser or system settings, then try again.'
+    const r = state.rec; r.phase = 'error';
+    r.error = e?.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser or system settings, then try again.'
       : e?.name === 'NotFoundError' ? 'No microphone was found.' : `Recording couldn't start: ${e?.message || e}`;
+    await clearEmptyFailedStart(r);
+    if (state.rec !== r) return;
   }
   if (state.current?.id === m.id) renderDoc();
-  renderRecBanner(); schedulePoll(); startPillClock(); notifyNative();
+  renderRecBanner(); schedulePoll(); notifyNative();
 }
 // A recording left paused this long finishes by itself (the phone recorder enforces the same limit natively),
 // so a forgotten pause never holds the summary thread back for hours.
@@ -1380,7 +1401,11 @@ function recordingSaveFailed(r, e) {
   if(state.current?.id===r.meetingId)renderDoc();
 }
 async function stopRecording({ reason = 'user' } = {}) {
-  const r = state.rec; if (!r?.engine || !['recording','error'].includes(r.phase)) return;
+  const r = state.rec; if (!r || !['recording','error'].includes(r.phase)) return;
+  if (!r.engine || (r.phase === 'error' && !r.engine.session && !r.engine.captureId && !r.engine.result)) {
+    if (await clearEmptyFailedStart(r)) endRecSession();
+    return;
+  }
   if (r.deletionConfirmed) return retryRecording();
   const id = r.meetingId; const engine = r.engine;
   clearTimeout(r.pauseTimer);
@@ -2126,7 +2151,7 @@ function bind() {
   window.addEventListener('resize', debounce(autogrow, 100));
   window.addEventListener('online', () => { state.rec?.engine?.uploader?.wake?.(); flushNotes(); if (state.current) renderStatus(state.current); renderPillQueue(); });
   window.addEventListener('offline', () => { if (state.current) renderStatus(state.current); renderPillQueue(); });
-  window.addEventListener('beforeunload', (e) => { if (state.rec && state.rec.phase !== 'error') { e.preventDefault(); e.returnValue = ''; } else flushNotes(); });
+  window.addEventListener('beforeunload', (e) => { if (state.rec && (state.rec.phase !== 'error' || state.rec.emptyStartProven !== true)) { e.preventDefault(); e.returnValue = ''; } else flushNotes(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { flushNotes(); refreshAll(); schedulePoll(); } });
   setInterval(() => { if (!document.hidden) { loadCalendar(); if (!state.rec) loadMeetings(); } }, 60000);
 

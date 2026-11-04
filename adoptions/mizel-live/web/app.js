@@ -1249,10 +1249,7 @@ function showParticipantsHint() {
 // observer/storage setup failed. Only the app can prove its own memory is empty, and shared custody
 // must independently report no current/pending take. Never cancel, acknowledge or discard on error.
 async function clearEmptyFailedStart(r) {
-  const retained = () => {
-    const e = r?.engine;
-    return !!(e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
-  };
+  const retained = () => failedStartOwnsMemory(r);
   if (!r || state.rec !== r || r.phase !== 'error' || retained()) return false;
   try {
     if (WizardApp.capture.current() || (await WizardApp.capture.pending()).length) return false;
@@ -1263,11 +1260,21 @@ async function clearEmptyFailedStart(r) {
   recordingUpdateHold?.release(); recordingUpdateHold = null; stopPillClock();
   return true;
 }
+function failedStartOwnsMemory(r) {
+  const e = r?.engine;
+  return !!(e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
+}
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
   const m = state.current; if (!m || deletingMeetings.has(m.id)) return;
   if (state.rec && state.rec.phase !== 'error') return;
   if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
-  if (state.rec) { if (!await clearEmptyFailedStart(state.rec)) return; endRecSession(); }
+  if (state.rec) {
+    const r = state.rec;
+    if (!await clearEmptyFailedStart(r)) { if (state.rec === r && !failedStartOwnsMemory(r)) await reattachShared(r); return; }
+    if (state.rec !== r) return; // Another same-task waiter may already own the next engine.
+    endRecSession();
+  }
+  if (state.current !== m || deletingMeetings.has(m.id)) return;
   const cbs = {
     onLevel: (lvl) => updateLevel(lvl),
     onQueue: () => renderPillQueue(),
@@ -1356,19 +1363,28 @@ async function retryRecording() {
   renderRecBanner();renderPill();notifyNative();if(state.current?.id===r.meetingId)renderDoc();
 }
 // Rebind fresh app observers after iframe reload. The shell retains the physical recorder and PCM custody.
-async function reattachShared() {
-  if(state.rec)return;
+async function reattachShared(failed = null) {
+  if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
+  let adopted = null;
   try {
-    const current=WizardApp.capture.current();
     const pending=await WizardApp.capture.pending();
+    // Re-entrant recovery/Retry/Stop cannot replace an engine installed by another waiter.
+    if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
+    const current=WizardApp.capture.current();
     const take=current || pending.find(t=>t.meta?.captureRecovery?.resumable) || pending[0];
-    if(!take?.meta?.meetingId)return;
-    const id=take.meta.meetingId;
+    let hint;try{hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');}catch{}
+    // No guessed meeting ownership: legacy metadata may use only our exact persisted capture hint.
+    const id=take?.meta?.meetingId || (hint?.id===take?.id ? hint?.meetingId : null);
+    if(!take || !id) {
+      if(failed && take) recordingSaveFailed(failed,Error('Shared audio has no verified meeting link. It is still kept; retry after its owner reconnects.'));
+      return;
+    }
+    failed?.engine?.detach?.();
     const cbs={onLevel:updateLevel,onQueue:renderPillQueue,onState:renderPill,onWarn:msg=>toast(msg,{error:true}),onLive:(samples,at)=>live.audio(samples,at),onNative:onNativeState};
     const engine=new SharedMeeting(id,cbs,{captureId:take.id});
-    state.rec={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
+    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
     if(current || take.meta?.captureRecovery?.resumable) {
-      await engine.start({systemAudio:false});state.rec.phase='recording';state.rec.paused=!!engine.info.paused;
+      await engine.start({systemAudio:false});if(state.rec!==r)return;r.phase='recording';r.paused=!!engine.info.paused;
       if(engine.info.phase==='error'||engine.info.inputStopped){state.rec.phase='error';await stopRecording();return;}
       live.start(id,'',{follow:engine.native&&!engine.livePcm});
     } else {
@@ -1378,12 +1394,12 @@ async function reattachShared() {
         state.rec.deletionConfirmed=true;state.rec.phase='deleting';await finishDeletedRecording(state.rec);return;
       }
       for(const c of take.streamChunks||[])engine.acceptChunk(c);
-      state.rec.phase='uploading';renderPill();await engine.uploader.drain();
+      r.phase='uploading';renderPill();await engine.uploader.drain();if(state.rec!==r)return;
       if(!take.meta?.native?.backendStopOwned)await API.stop(id,{final_seq:engine.finalSeq,reason:take.partial?'process_death':'user'});
-      await engine.acknowledge();endRecSession();void reattachShared();
+      if(state.rec!==r)return;await engine.acknowledge();if(state.rec!==r)return;endRecSession();void reattachShared();return;
     }
-    renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();
-  }catch(e){if(state.rec)recordingSaveFailed(state.rec,e);}
+    renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();return r;
+  }catch(e){if(adopted && state.rec===adopted)recordingSaveFailed(adopted,e);return adopted;}
 }
 
 async function toggleSystemAudio() {
@@ -1403,7 +1419,11 @@ function recordingSaveFailed(r, e) {
 async function stopRecording({ reason = 'user' } = {}) {
   const r = state.rec; if (!r || !['recording','error'].includes(r.phase)) return;
   if (!r.engine || (r.phase === 'error' && !r.engine.session && !r.engine.captureId && !r.engine.result)) {
-    if (await clearEmptyFailedStart(r)) endRecSession();
+    if (await clearEmptyFailedStart(r)) { if (state.rec === r) endRecSession(); }
+    else if (state.rec === r && !failedStartOwnsMemory(r)) {
+      const adopted = await reattachShared(r);
+      if (adopted && state.rec === adopted && ['recording','error'].includes(adopted.phase)) return stopRecording({reason});
+    }
     return;
   }
   if (r.deletionConfirmed) return retryRecording();

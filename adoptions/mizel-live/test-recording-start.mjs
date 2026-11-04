@@ -5,19 +5,20 @@ import vm from 'node:vm';
 const source=readFileSync(process.env.MIZEL_APP_SOURCE || new URL('./web/app.js',import.meta.url),'utf8');
 const slice=(a,b)=>{const i=source.indexOf(a),j=source.indexOf(b,i);assert(i>=0&&j>i,a);return source.slice(i,j)};
 function fixture({start, pending=async()=>[], current=()=>null}={}) {
- const calls=[],holds=new Set(),state={current:{id:'synthetic',title:'Synthetic',status:'recording'},rec:null};
- const ctx={state,WizardApp:{capture:{current,pending},update:{hold(reason){holds.add(reason);return {release(){calls.push('release');holds.delete(reason)}}}}},
+ const acked=new Set(),engines=[],calls=[],holds=new Set(),state={current:{id:'synthetic',title:'Synthetic',status:'recording'},rec:null};
+ const ctx={state,WizardApp:{capture:{current:()=>{const r=current();return r&&!acked.has(r.id)?r:null},pending:async()=>(await pending()).filter(r=>!acked.has(r.id))},update:{hold(reason){holds.add(reason);return {release(){calls.push('release');holds.delete(reason)}}}}},
   deletingMeetings:new Set(),prefs:{},live:{start(){},stop(){}},els:{notepad:{hidden:true},docPane:{dataset:{}}},mobileMQ:{matches:false},
   discardWarm(){calls.push('release-warm')},setCurrent(v){state.current=v},isImported:()=>false,navigate(){calls.push('navigate')},
-  setInterval:()=>1,clearInterval(){},clearTimeout(){},document:{querySelector:()=>null},errMsg:e=>e.message,
-  SharedMeeting:class {constructor(){this.uploader={pending:0};this.sent=new Set();this.finalSeq={};this.detach=()=>calls.push('detach');this.abort=()=>calls.push('FORBIDDEN abort');this.stop=()=>{calls.push('stop');return {meta:{}}};this.acknowledge=()=>calls.push('ack');this.uploader.drain=async()=>{};}async start(){if(start)await start(this);else throw Error('Synthetic permission rejection')}},
+  setInterval:()=>1,clearInterval(){},clearTimeout(){},document:{querySelector:()=>null},errMsg:e=>e.message,onNativeState(){},sessionStorage:{getItem:()=>null},
+  SharedMeeting:class {constructor(id,cbs,opts={}){engines.push(this);this.meetingId=id;this.captureId=opts.captureId;this.info={};this.uploader={pending:0};this.sent=new Set();this.finalSeq={};this.detach=()=>calls.push('detach');this.abort=()=>calls.push('FORBIDDEN abort');this.stop=()=>{calls.push('stop');return {meta:{}}};this.acknowledge=()=>{acked.add(this.captureId);calls.push('ack')};this.uploader.drain=async()=>{};}async start(){if(start)await start(this);else throw Error('Synthetic permission rejection')}},
   API:{stop:async()=>({id:'synthetic'})},loadMeeting:async()=>{},loadMeetings(){},toast(){},retryRecording(){}};
- for(const n of ['renderDoc','renderRecBanner','renderPill','renderAskBar','renderHeader','tickPillClock','schedulePoll','notifyNative','showParticipantsHint'])ctx[n]=()=>{};
+ for(const n of ['updateLevel','renderPillQueue','renderDoc','renderRecBanner','renderPill','renderAskBar','renderHeader','tickPillClock','schedulePoll','notifyNative','showParticipantsHint'])ctx[n]=()=>{};
  vm.createContext(ctx);
  vm.runInContext(slice('async function clearEmptyFailedStart(', '// A recording left paused')+slice('function recordingSaveFailed(', 'async function finishStop(')+slice('function endRecSession()', 'const BAR_SHAPE =')+';globalThis.x={beginRecording,stopRecording,clearEmptyFailedStart};',ctx);
+ vm.runInContext(slice('async function reattachShared(', 'async function toggleSystemAudio('),ctx);
  const unloadLine=source.split('\n').find(line=>line.includes("window.addEventListener('beforeunload'"));assert(unloadLine);
  ctx.window={addEventListener:(_name,fn)=>ctx.unload=fn};ctx.flushNotes=()=>calls.push('flush-notes');vm.runInContext(unloadLine,ctx);
- return {ctx,state,calls,holds,x:ctx.x};
+ return {engines,ctx,state,calls,holds,x:ctx.x};
 }
 test('failed empty Start holds synchronously, then releases only its own hold; Stop clears the error UI',async()=>{
  let reject;const f=fixture({start:()=>new Promise((_,r)=>reject=r)});
@@ -50,4 +51,61 @@ test('standalone unload protects retained or unknown error audio; only positivel
 test('empty error can retry Start; a retained error cannot replace its original take',async()=>{
  let attempt=0;const f=fixture({start:async()=>{attempt++;if(attempt===1)throw Error('Denied')}});await f.x.beginRecording();await f.x.beginRecording();assert.equal(attempt,2);assert.equal(f.state.rec.phase,'recording');assert(f.holds.has('Mizel recording'));
  const g=fixture({pending:async()=>[{id:'original'}]});await g.x.beginRecording();const old=g.state.rec;await g.x.beginRecording();assert.equal(g.state.rec,old);assert(!g.calls.includes('release'));
+});
+const tick=async()=>{for(let i=0;i<24;i++)await Promise.resolve()};
+for(const second of ['Start','Stop'])test(`same-task double cleanup (${second}) cannot tear down the next starting engine`,async()=>{
+  let attempt=0,finishStart;let pending=async()=>[];
+  const f=fixture({pending:()=>pending(),start:async()=>{if(++attempt===1)throw Error('Denied');await new Promise(r=>finishStart=r)}});
+  await f.x.beginRecording();
+  const waiters=[];pending=()=>new Promise(r=>waiters.push(r));
+  const a=f.x.beginRecording(),b=second==='Start'?f.x.beginRecording():f.x.stopRecording();
+  assert.equal(waiters.length,2);
+  // Resolve both pending() promises in exactly this task, not separate timer/microtask turns.
+  for(const r of waiters)r([]);
+  await tick();const next=f.state.rec,engine=next.engine;
+  assert.equal(attempt,2);assert.equal(next.phase,'starting');assert(f.holds.has('Mizel recording'));
+  const detaches=f.calls.filter(x=>x==='detach').length;
+  finishStart();await Promise.all([a,b]);assert.equal(f.state.rec,next);assert.equal(next.engine,engine);
+  assert.equal(next.phase,'recording');assert(f.holds.has('Mizel recording'));
+  assert.equal(f.calls.filter(x=>x==='detach').length,detaches);
+});
+for(const action of ['Start','Stop'])test(`failed ${action} adopts exact current app capture instead of dead-ending or starting a new mic`,async()=>{
+  let current=null,attempt=0;
+  const f=fixture({current:()=>current,start:async e=>{
+    attempt++;if(attempt===1){current={id:'retained-capture',meta:{meetingId:'synthetic'}};throw Error('Lost shell reply')}
+    assert.equal(e.captureId,current.id);e.session={};
+  }});
+  await f.x.beginRecording();const failed=f.state.rec;assert(failed.engine);assert(f.holds.has('Mizel recording'));
+  if(action==='Start')await f.x.beginRecording();else await f.x.stopRecording();
+  assert.equal(attempt,2);assert.notEqual(f.state.rec,failed);
+  assert(!f.calls.includes('FORBIDDEN abort'));assert.equal(f.calls.filter(x=>x==='release').length,action==='Stop'?1:0);
+  if(action==='Start'){assert.equal(f.state.rec.phase,'recording');assert.equal(f.state.rec.engine.captureId,'retained-capture');assert(f.holds.has('Mizel recording'));}
+  else {assert(f.calls.includes('stop'));assert(f.calls.includes('ack'));assert.equal(f.state.rec,null);}
+});
+test('legacy pending without metadata uses only an exact capture hint, never guesses a meeting',async()=>{
+  for(const match of [true,false]){
+    const take={id:'retained',streamChunks:[]};const f=fixture({pending:async()=>[take]});
+    await f.x.beginRecording();const failed=f.state.rec;
+    f.ctx.sessionStorage.getItem=()=>JSON.stringify({id:match?'retained':'different',meetingId:'synthetic'});
+    await f.x.beginRecording();
+    if(match){assert.equal(f.state.rec,null);assert(f.calls.includes('ack'));}
+    else {assert.equal(f.state.rec,failed);assert.match(failed.error,/no verified meeting link/);assert(f.holds.has('Mizel recording'));assert(!f.calls.includes('ack'));assert(!f.calls.includes('release'));}
+  }
+});
+test('concurrent retained-capture adoption installs only one engine and keeps its hold',async()=>{
+  let current=null,attempt=0;
+  const f=fixture({current:()=>current,start:async e=>{if(++attempt===1){current={id:'retained',meta:{meetingId:'synthetic'}};throw Error('Lost reply')}e.session={}}});
+  await f.x.beginRecording();await Promise.all([f.x.beginRecording(),f.x.beginRecording()]);
+  assert.equal(attempt,2);assert.equal(f.state.rec.engine.captureId,'retained');assert(f.holds.has('Mizel recording'));assert(!f.calls.includes('release'));
+});
+test('Stop adoption awaiting resume cannot stop or mutate a replacement controller',async()=>{
+  let current=null,attempt=0,resume;
+  const f=fixture({current:()=>current,start:async e=>{
+    if(++attempt===1){current={id:'retained',meta:{meetingId:'synthetic'}};throw Error('Lost reply')}
+    await new Promise(r=>resume=r);e.session={};
+  }});
+  await f.x.beginRecording();const work=f.x.stopRecording();await tick();assert.equal(attempt,2);
+  const next={meetingId:'replacement',phase:'recording',engine:{captureId:'different'}};f.state.rec=next;
+  resume();await work;assert.equal(f.state.rec,next);assert.equal(next.phase,'recording');
+  assert(!f.calls.includes('stop'));assert(!f.calls.includes('ack'));assert(!f.calls.includes('release'));
 });

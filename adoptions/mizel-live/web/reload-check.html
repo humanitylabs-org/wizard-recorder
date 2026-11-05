@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-app="mizel">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="same-origin">
+  <title>Recorder reload check</title>
+  <script src="/wizard-os-home/core/app-client.js"></script>
+  <link rel="stylesheet" href="wizard-style.css">
+  <link rel="stylesheet" href="reload-check.css">
+</head>
+<body>
+  <main class="reload-check">
+    <h1>Recorder reload check</h1>
+    <p>This reads the check in your open Wizard. It does not stop, recover, save or reload a recording.</p>
+    <pre data-reload-check-result role="status" aria-live="polite">Reading the open check…</pre>
+    <p>The result stays on this device. Share only these three lines.</p>
+    <button class="w-btn" type="button" data-reload-check>Read check again</button>
+    <p>If the reason is <code>shell_unavailable</code>, this page is not inside your open Wizard.</p>
+  </main>
+  <script type="module" src="reload-check.js"></script>
+</body>
+</html>

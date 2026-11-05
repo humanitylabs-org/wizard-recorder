@@ -1,0 +1,36 @@
+// Exact read-only predicate excerpt from wizard-ux app-capture.js live source 0f00ad6a.
+// Full module SHA256 c414dbb087f0b93d21b17d48e763ed31ead769721e4981f8d9842d57c7ece18e.
+// QA_REVIEW_CAPTURE replaces this pin with actual captured/served full source.
+  function reloadCheck() {
+    const no = reason => ({ safe: false, reason, keeps: null, recheck: !active && preparations.size === 0 });
+    if (preparations.size) return no('capture_starting');
+    if (!ownershipLoaded || recoveryError) return no('capture_custody_uncertain');
+    if (unknownMeetingActive || [...ownedRows.values()].some(r => r.native && !r.nativeId && ['starting', 'recording', 'recoverable'].includes(r.status))) return no('native_owner_uncertain');
+    try { if (JSON.parse((W.WizardOSDevice || W.WosDeviceRecording?.device())?.recActive?.() || 'null')?.id) return no('device_recording'); } catch (_) { return no('device_recording'); }
+    // Only the Android app's meeting port (MeetingRecorderService) is known to record and upload on its own
+    // through a page reload. The Mac app's recorder and any bridge attached in-page wait for the end instead.
+    const survives = !attachedMeetingBridge && !W.wizardNative?.meetings && !!W.wizardMizelPort;
+    const isMeeting = r => survives && r?.native === 'wizard-meetings' && !!r.nativeId && r.kind === 'meeting';
+    const keep = r => ({ appId: r.appId, id: r.id, meetingId: r.meta?.meetingId || r.nativeId });
+    const live = [...recoveryLive].map(id => ownedRows.get(id)).filter(Boolean);
+    if ([...ownedRows.values()].some(r => r.status !== 'pending' && !(active && r.id === active.row.id) && !recoveryLive.has(r.id))) return no('capture_custody_uncertain');
+    if (active) {
+      const s = active;
+      const steady = isMeeting(s.row) && !!s.engine && ['recording', 'paused'].includes(s.phase) && !s.borrow && !s.borrowWork &&
+        !s.finishPromise && !s.error && !s.engineDetached && !s.interrupted && !s.discard;
+      if (live.some(r => r.id !== s.row.id)) return no('capture_custody_uncertain');
+      if (!steady) {
+        const blocked = no(s.borrow || s.borrowWork ? 'microphone_loan' : 'capture');
+        // Waiting for an end is a positive live-engine contract, not a synonym for unsafe custody.
+        blocked.waitForEnd = !!s.engine && ['recording', 'paused', 'stopping'].includes(s.phase) &&
+          !s.borrow && !s.borrowWork && !s.error && !s.engineDetached && !s.interrupted && !s.discard;
+        return blocked;
+      }
+      return { safe: true, reason: null, keeps: keep(s.row) };
+    }
+    if (live.length > 1 || live.some(r => !isMeeting(r))) return no('capture');
+    return { safe: true, reason: null, keeps: live[0] ? keep(live[0]) : null,
+      recheck: true, durable: ownershipLoaded && !recoveryError && live.length === 0 &&
+        [...ownedRows.values()].every(r => r.status === 'pending') };
+  }
+  // Reload may re-probe

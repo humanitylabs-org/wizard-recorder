@@ -7,10 +7,11 @@ assert(shell&&appRoot&&out,'QA_SHELL_SOURCE, QA_APP_SOURCE and QA_OUT required')
 process.env.QA_TREE=shell;fs.mkdirSync(out,{recursive:true});
 const {chromium}=require(path.join(shell,'tools/qa-playwright.cjs'));
 const fixture=require(path.join(shell,'tools/qa-closed-shell.cjs'));
+const evidenceHelper=require(path.join(shell,'tools/qa-recorder-stop-evidence.cjs'));
 const controller=require(path.join(shell,'tools/qa-recorder-controller.cjs'));
 const recorder=fs.readFileSync(path.join(appRoot,'app.js'),'utf8');
 const controllerPage=controller.fixture(recorder);
-const report={synthetic:true,baseline:process.env.QA_DIAGNOSTIC_BASELINE==='1',cases:[],screenshots:[]};
+const report={synthetic:true,baseline:process.env.QA_DIAGNOSTIC_BASELINE==='1',cases:[],screenshots:[],sinks:[],secureContexts:[]};
 const hash=bytes=>require('node:crypto').createHash('sha256').update(bytes).digest('hex');
 report.source={capture:hash(fs.readFileSync(path.join(shell,'web/core/app-capture.js'))),recorder:hash(recorder)};
 let browser,page,stage='boot';
@@ -19,7 +20,12 @@ const pass=s=>{report.cases.push(s);console.log('PASS',s)};
  browser=await chromium.launch({executablePath:process.env.QA_CHROME||undefined,args:['--disable-background-networking','--use-angle=swiftshader','--enable-unsafe-swiftshader']});fixture.setBrowser(browser);
  for(const phone of [true,false]){
   const mode=phone?'phone':'desktop';stage=mode+': boot';let version='a'.repeat(40);
+  const sinkReport={mode,errors:[],evidenceRequests:[]};report.sinks.push(sinkReport);
+  const sink=await evidenceHelper.start({out,mode,report:sinkReport});
+  sinkReport.origin=evidenceHelper.origin(sink);let context;
+  try{
   const {c,s}=await fixture.boot(phone,async c=>{
+   context=c;
    await c.addInitScript(()=>{if(window===top)sessionStorage.setItem('syntheticLoads',String(+(sessionStorage.getItem('syntheticLoads')||0)+1));});
    await c.route('**/wizard/v1/apps',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({apps:[{id:'mizel',name:'Synthetic Recorder',kind:'wizard',url:'/mizel-live/',source:'apps.json'}]})}));
    await c.route('**/wizard-os-home/ux-version.txt',r=>r.fulfill({contentType:'text/plain',body:version}));
@@ -32,8 +38,13 @@ const pass=s=>{report.cases.push(s);console.log('PASS',s)};
     }
     throw Error('Unadmitted app route '+u.pathname);
    });
-  });
-  page=fixture.getPage();await page.clock.resume();await page.evaluate(()=>WizOpenApp('mizel'));
+  },sink);
+  page=fixture.getPage();
+  const secure=await page.evaluate(()=>({origin:location.origin,isSecureContext,webLocks:typeof navigator.locks?.request==='function'}));
+  report.secureContexts.push({mode,...secure});
+  assert.equal(secure.origin,evidenceHelper.origin(sink));assert.equal(secure.isSecureContext,true);assert.equal(secure.webLocks,true);
+  pass(mode+': owned loopback is secure with real Web Locks');
+  await page.clock.resume();await page.evaluate(()=>WizOpenApp('mizel'));
   await page.waitForFunction(()=>[...document.querySelectorAll('iframe')].some(f=>f.contentWindow?.fixtureReady));
   const original=page.frames().find(f=>new URL(f.url()).pathname==='/mizel-live/');assert(original);
   assert.equal(await original.evaluate(()=>window.fixtureError||null),null);
@@ -69,7 +80,15 @@ const pass=s=>{report.cases.push(s);console.log('PASS',s)};
   stage=mode+': standalone dark fallback';const standalone=await c.newPage();await standalone.goto(new URL('/mizel-live/reload-check.html',page.url()).href);
   await standalone.waitForFunction(()=>document.querySelector('pre')?.textContent.includes('shell_unavailable'));
   const fallback=path.join(out,mode+'-standalone-dark.png');await standalone.screenshot({path:fallback});report.screenshots.push({file:fallback,skin:'standalone-dark'});await standalone.close();
-  pass(mode+': standalone refuses a fabricated host reading');await c.close();
+  pass(mode+': standalone refuses a fabricated host reading');
+  }catch(e){
+   const current=fixture.getPage();
+   report.syntheticFailureState=await current?.evaluate(()=>({origin:location.origin,isSecureContext,webLocks:typeof navigator.locks?.request==='function',nativeRegistryReady:window.WizAppCapture?.getState().nativeRegistryReady,error:window.WizAppCapture?.getState().error})).catch(()=>null);
+   await current?.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});throw e;
+  }finally{
+   try{await context?.close();}finally{await sink.close();}
+   assert.deepEqual(sinkReport.errors,[],'owned evidence sink errors');
+  }
  }
  assert.deepEqual(fixture.report.unknown,[]);assert.deepEqual(fixture.report.errors,[]);assert.deepEqual(fixture.report.refusedWrites,[]);pass('closed synthetic network fence');
 }catch(e){report.failure={stage,error:String(e.stack)};process.exitCode=1;console.error(report.failure);await page?.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}finally{fs.writeFileSync(path.join(out,'reload-check-browser.json'),JSON.stringify(report,null,2));fs.writeFileSync(path.join(out,'fixture-requests.json'),JSON.stringify(fixture.report,null,2));await browser?.close();}})();

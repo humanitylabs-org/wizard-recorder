@@ -57,7 +57,20 @@ test('diagnostic panel and button use the transported base/text pair, not missin
   const css=readFileSync(new URL('reload-check.css',appRoot),'utf8');
   assert(!css.includes('--wz-panel'));
   assert.match(css,/pre\s*\{[^}]*background:\s*var\(--wz-base,\s*#0f1014\)/);
-  assert.match(css,/\.reload-check button\.w-btn\s*\{[^}]*color:\s*var\(--wz-text,[^}]*background:\s*var\(--wz-base,\s*#0f1014\)/);
+  assert.match(css,/\.reload-check button\.w-btn[^{}]*\{[^}]*color:\s*var\(--wz-text,[^}]*background:\s*var\(--wz-base,\s*#0f1014\)/);
+});
+test('diagnostic hover and focus keep the base/text pair above legacy button hover specificity',()=>{
+  const css=readFileSync(new URL('reload-check.css',appRoot),'utf8');
+  const rule=css.match(/([^{}]+)\{([^{}]+)\}/g).find(rule=>rule.includes('.reload-check button.w-btn:hover:not(:disabled)'));
+  assert(rule,'explicit scoped hover selector must override legacy .w-btn:hover:not(:disabled)');
+  const [selectors,declarations]=rule.split('{');
+  assert.deepEqual(selectors.trim().split(/\s*,\s*/),[
+    '.reload-check button.w-btn',
+    '.reload-check button.w-btn:hover:not(:disabled)',
+    '.reload-check button.w-btn:focus-visible',
+  ]);
+  assert.match(declarations,/color:\s*var\(--wz-text,/);
+  assert.match(declarations,/background:\s*var\(--wz-base,/);
 });
 test('diagnostic imports no recorder core and normal Recorder entry stays unchanged',()=>{
   const html=readFileSync(new URL('reload-check.html',appRoot),'utf8');

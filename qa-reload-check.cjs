@@ -65,7 +65,11 @@ const pass=s=>{report.cases.push(s);console.log('PASS',s)};
    assert(ui.height>=48);assert(!ui.overflow);assert(!ui.panel.includes('rgba'));const file=path.join(out,mode+'-'+skin+'-reload-check.png');await page.screenshot({path:file});report.screenshots.push({file,skin,...ui});
    await frame.locator('button').click();assert.match(await frame.locator('pre').textContent(),/native_owner_uncertain/);
   }
-  pass(mode+': live two-skin appearance and repeat read');await c.close();
+  pass(mode+': live two-skin appearance and repeat read');
+  stage=mode+': standalone dark fallback';const standalone=await c.newPage();await standalone.goto(new URL('/mizel-live/reload-check.html',page.url()).href);
+  await standalone.waitForFunction(()=>document.querySelector('pre')?.textContent.includes('shell_unavailable'));
+  const fallback=path.join(out,mode+'-standalone-dark.png');await standalone.screenshot({path:fallback});report.screenshots.push({file:fallback,skin:'standalone-dark'});await standalone.close();
+  pass(mode+': standalone refuses a fabricated host reading');await c.close();
  }
  assert.deepEqual(fixture.report.unknown,[]);assert.deepEqual(fixture.report.errors,[]);assert.deepEqual(fixture.report.refusedWrites,[]);pass('closed synthetic network fence');
 }catch(e){report.failure={stage,error:String(e.stack)};process.exitCode=1;console.error(report.failure);await page?.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}finally{fs.writeFileSync(path.join(out,'reload-check-browser.json'),JSON.stringify(report,null,2));fs.writeFileSync(path.join(out,'fixture-requests.json'),JSON.stringify(fixture.report,null,2));await browser?.close();}})();

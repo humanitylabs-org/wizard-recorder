@@ -3,5 +3,5 @@ body { font-family: var(--wz-font, system-ui, sans-serif); }
 .reload-check { box-sizing: border-box; width: 100%; padding: 24px; }
 h1 { margin: 0 0 20px; font-size: 24px; }
 p { max-width: 65ch; line-height: 1.5; color: var(--wz-text-secondary, #c3c3cf); }
-pre { box-sizing: border-box; width: 100%; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--wz-panel, #1b1c23); border: 1px solid var(--wz-border, #494a56); border-radius: var(--wz-radius, 12px); line-height: 1.7; }
-button { min-height: 48px; padding: 12px 18px; color: var(--wz-text, #efeff4); background: var(--wz-panel, #1b1c23); border: 1px solid var(--wz-border, #494a56); border-radius: var(--wz-radius, 12px); font: inherit; cursor: pointer; }
+pre { box-sizing: border-box; width: 100%; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--wz-base, #0f1014); border: 1px solid var(--wz-border, #494a56); border-radius: var(--wz-radius, 12px); line-height: 1.7; }
+.reload-check button.w-btn { min-height: 48px; padding: 12px 18px; color: var(--wz-text, #efeff4); background: var(--wz-base, #0f1014); border: 1px solid var(--wz-border, #494a56); border-radius: var(--wz-radius, 12px); font: inherit; cursor: pointer; }

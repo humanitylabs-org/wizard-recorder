@@ -53,6 +53,12 @@ test('cross-origin access failure stays unknown',()=>{
   const output={textContent:''};const win={location:{origin:'https://synthetic.invalid'},document:{querySelector:s=>s.includes('result')?output:{addEventListener(){}}},parent:{get location(){throw Error('PRIVATE')}}};
   showReloadCheck(win);assert.match(output.textContent,/shell_unavailable/);assert(!output.textContent.includes('PRIVATE'));
 });
+test('diagnostic panel and button use the transported base/text pair, not missing panel tokens',()=>{
+  const css=readFileSync(new URL('reload-check.css',appRoot),'utf8');
+  assert(!css.includes('--wz-panel'));
+  assert.match(css,/pre\s*\{[^}]*background:\s*var\(--wz-base,\s*#0f1014\)/);
+  assert.match(css,/\.reload-check button\.w-btn\s*\{[^}]*color:\s*var\(--wz-text,[^}]*background:\s*var\(--wz-base,\s*#0f1014\)/);
+});
 test('diagnostic imports no recorder core and normal Recorder entry stays unchanged',()=>{
   const html=readFileSync(new URL('reload-check.html',appRoot),'utf8');
   assert(!html.includes('app-capture.js'));assert(!html.includes('src="app.js"'));assert(html.includes('reload-check.js'));

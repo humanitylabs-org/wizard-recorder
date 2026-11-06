@@ -1195,8 +1195,14 @@ class SharedMeeting {
       if(e.code!=='native_upload_pending')throw e;this.cbs.onQueue();await new Promise(resolve=>setTimeout(resolve,1500));
     }}
     const markers=this.result?.meta?.handoffs||[];
-    if(markers.length){const saved=await api(`orb-events?meetingId=${enc(this.meetingId)}`);
-      if(markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs&&(!m.voiceTakeId||e.voiceTakeId===m.voiceTakeId)&&(!m.endedAt||e.endedAt===m.endedAt))))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
+    // The audio is already verified on the server above. Orb-event links are metadata: give the shell's
+    // journal a few seconds to sync, then save anyway. A failed or abandoned orb press (e.g. the phone's
+    // storage timed out mid-handoff) must never hold the whole meeting hostage (James, 6 Nov 2026).
+    if(markers.length){for(let i=0;i<4;i++){let saved=null;try{saved=await api(`orb-events?meetingId=${enc(this.meetingId)}`);}catch{}
+      const missing=markers.filter(m=>!saved?.events?.some(e=>e.id===m.id&&e.captureId===this.captureId));
+      if(!missing.length)break;
+      if(i===3){console.warn('mizel: saving without '+missing.length+' unsynced orb event(s)');break;}
+      await new Promise(resolve=>setTimeout(resolve,1500));}
     }
     await WizardApp.capture.ack(this.captureId);this.detach();
     try {const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');if(hint?.id===this.captureId)sessionStorage.removeItem('mizel.sharedCapture');}catch{} }

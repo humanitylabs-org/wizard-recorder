@@ -867,20 +867,20 @@ async function loadDiscussions() {
     }
   }catch{}finally{discussionLoading=false;}
 }
-// Orb voice notes are ordinary Wizard chats, not meeting material: the meeting view no longer shows them
-// (James, 6 Nov 2026: "This should not be happening. Remove this.").
+setInterval(loadDiscussions,3000);
+const openOrbAnswers = new Set(); // keep an opened answer open across live re-renders
 function discussionCard(e) {
-  const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
-  return h('section',{class:'qa orb-event',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)}},
-    h('header',{},h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),' ',h('strong',{text:label})),
-    h('p',{text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Question pending transcription')}),
-    h('small',{text:'Assistant material · not meeting speech or an agreed decision'}),
-    e.threadId&&h('p',{},h('a',{class:'w-btn w-btn-sm',href:threadHref(e.threadId),target:'_top',text:'Continue in Wizard'})),
-    e.answer&&h('details',{},h('summary',{text:'Assistant answer'}),h('p',{text:e.answer})),
-    e.error&&h('p',{text:e.error}));
+  const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled':e.status==='local'?'On-device':'Orb · '+e.status;
+  return h('section',{class:'orb-note',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)},title:'Assistant material · not meeting speech or an agreed decision'},
+    h('div',{class:'orb-note-head'},
+      h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),
+      h('span',{class:'orb-note-label',text:label}),
+      e.threadId&&h('a',{class:'orb-note-open',href:threadHref(e.threadId),target:'_top',text:'Open chat'})),
+    h('p',{class:'orb-note-q',text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Voice note')}),
+    e.answer&&h('details',{class:'orb-note-a',open:openOrbAnswers.has(e.id),ontoggle:ev=>ev.target.open?openOrbAnswers.add(e.id):openOrbAnswers.delete(e.id)},h('summary',{text:'Answer'}),h('p',{text:e.answer})),
+    e.error&&h('p',{class:'orb-note-err',text:e.error}));
 }
 function discussionSection(id) {
-  return null;
   const rows=(linkedDiscussions.get(id)||[]).filter(e=>!['cancelled','paused','local'].includes(e.status));
   return rows.length?h('section',{class:'sum-topic linked-discussions'},h('h3',{text:'Archimedes discussions'}),...rows.map(discussionCard)):null;
 }
@@ -1012,7 +1012,8 @@ function renderSegments(container, { scrollEnd = false } = {}) {
   if (!container) return;
   const m = state.current; const segs = m?.segments || [];
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
-  const timeline=transcriptTimeline(segs,[]);
+  const events=linkedDiscussions.get(m?.id)||[];
+  const timeline=transcriptTimeline(segs,events);
   const kids = timeline.map((g) => g.event?discussionCard(g.event):h('div', { class: `tx ${g.source}` },
     h('div', { class: 'who' }, player.ok && player.id === m?.id
       ? h('button', { class: 'tx-at', type: 'button', title: 'Play from here', text: fmtClock(g.start), onclick: () => player.seek(g.start, true) })

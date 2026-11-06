@@ -685,3 +685,15 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 /* Wizard's agent orb is the New recording button (WizardApp.orb.claim): ours steps aside. */
 html.orb-claimed .rec-fab { display: none !important; }
 @media (max-width: 760px) { html.orb-claimed .side-foot { padding-right: 88px; } }
+
+/* Orb voice notes inside a meeting: a quiet aside, not a card. No entry animation: the transcript
+   re-renders every few seconds while recording, and an animated card flickered each time (James, 6 Nov 2026). */
+.orb-note { margin: 4px 0 8px; padding: 6px 0 6px 12px; border-left: 2px solid color-mix(in srgb, var(--w-wiz) 55%, transparent); font-size: 13.5px; color: var(--w-text-2); animation: none; }
+.orb-note-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--w-text-3); }
+.orb-note-head .sum-at { min-height: 0; }
+.orb-note-label { font-weight: 600; color: var(--w-text-2); }
+.orb-note-open { margin-left: auto; color: var(--w-text-3); text-decoration: underline; text-underline-offset: 2px; }
+.orb-note-q { margin: 3px 0 0; line-height: 1.45; }
+.orb-note-a summary { margin-top: 3px; font-size: 12px; color: var(--w-text-3); cursor: pointer; }
+.orb-note-a p { margin: 4px 0 0; white-space: pre-wrap; line-height: 1.45; }
+.orb-note-err { margin: 3px 0 0; font-size: 12px; color: var(--w-danger); }

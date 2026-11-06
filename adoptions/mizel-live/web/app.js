@@ -867,7 +867,8 @@ async function loadDiscussions() {
     }
   }catch{}finally{discussionLoading=false;}
 }
-setInterval(loadDiscussions,3000);
+// Orb voice notes are ordinary Wizard chats, not meeting material: the meeting view no longer shows them
+// (James, 6 Nov 2026: "This should not be happening. Remove this.").
 function discussionCard(e) {
   const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
   return h('section',{class:'qa orb-event',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)}},
@@ -879,6 +880,7 @@ function discussionCard(e) {
     e.error&&h('p',{text:e.error}));
 }
 function discussionSection(id) {
+  return null;
   const rows=(linkedDiscussions.get(id)||[]).filter(e=>!['cancelled','paused','local'].includes(e.status));
   return rows.length?h('section',{class:'sum-topic linked-discussions'},h('h3',{text:'Archimedes discussions'}),...rows.map(discussionCard)):null;
 }
@@ -1010,8 +1012,7 @@ function renderSegments(container, { scrollEnd = false } = {}) {
   if (!container) return;
   const m = state.current; const segs = m?.segments || [];
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
-  const events=linkedDiscussions.get(m?.id)||[];
-  const timeline=transcriptTimeline(segs,events);
+  const timeline=transcriptTimeline(segs,[]);
   const kids = timeline.map((g) => g.event?discussionCard(g.event):h('div', { class: `tx ${g.source}` },
     h('div', { class: 'who' }, player.ok && player.id === m?.id
       ? h('button', { class: 'tx-at', type: 'button', title: 'Play from here', text: fmtClock(g.start), onclick: () => player.seek(g.start, true) })

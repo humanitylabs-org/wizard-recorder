@@ -1,0 +1,13 @@
+# STAGED ONLY. Import inside the existing authenticated site BEFORE legacy handlers.
+# RECORDER_UPSTREAM must be the approved Recorder view address/socket; no default.
+# Keep the site's existing authentication/tailnet protections around these handlers.
+@recorder_native_api path /meetings/api /meetings/api/*
+handle @recorder_native_api {
+    uri strip_prefix /meetings
+    reverse_proxy {$RECORDER_UPSTREAM}
+}
+@recorder_native_events path /mizel-live/orb-events /mizel-live/orb-events/*
+handle @recorder_native_events {
+    uri strip_prefix /mizel-live
+    reverse_proxy {$RECORDER_UPSTREAM}
+}

@@ -1,0 +1,11 @@
+# Native Recorder compatibility — staged, never applied
+
+The current Android native recorder uploads PCM WAV chunks to `/meetings/api/meetings/<id>/chunks?source=me&seq=N&start_ms=M`, stops with `{"final_seq":{"me":N},"reason":"user"}`, then reads `/meetings/api/meetings/<id>` until `status=ready`. Its handoff journal PUTs `/mizel-live/orb-events`. A route-only cutover leaves those native uploads pointed at the stopped former service, even while the new page is open. The durable capture acknowledgement correctly waits forever because the canonical task never receives the audio.
+
+`native-aliases.caddy` stages the minimal compatibility bridge into Recorder, including query strings. Import it inside the authenticated site, before old handlers, only after separate approval for a cutover; set `RECORDER_UPSTREAM` to the approved Recorder view upstream. This is a snippet, not a replacement gateway config. Preserve all existing site authentication. Rollback is removing the import and restoring the previous routes. **Nothing in this repository applies it.**
+
+The vendored capture facade also keeps the existing `wizardMizelPort` bridge as a fallback to a future `wizardRecorderPort`. Renaming this bridge prematurely was an independent native-capture regression. Host-owned capture remains host-owned. Root Back is consumed in both browser and installed modes.
+
+Follow-up (no APK change in this work): make `MizelPolicy.chunkPath/stopPath/meetingPath`, `MeetingEventSync`, and `Origin.java` use the admitted app ID/base path passed by the shell at task creation, not a fixed former app path. Store that routing identity in the durable native outbox so retained recordings survive shell/app changes. Keep a compatibility alias while older APKs/outboxes exist. Add native tests for legacy and app-ID paths, app-path admission, process-death retries, replay/dedupe, promised final chunks, and event readback before pruning. Do not prune local audio until the canonical task has all promised chunks and the exact PCM is verified.
+
+The API's terminal completed state is `ready` (not `done`); evidence must assert the actual protocol state and nonempty saved audio. Agent dispatch in QA must be stubbed, never sent to owner agents.

@@ -1,32 +1,34 @@
 import { ownerIdentityPrompt, noAttributionPrompt } from './owner-identity.mjs';
-// Mizel private live transcription and summaries; explicit manual Wizard requests only.
+// Recorder private live transcription and summaries; explicit manual Wizard requests only.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { TinfoilProvider, parseSummaryDelta } from './provider.js';
+import { LiveClient } from './live-client.js';
+import { TinfoilProvider } from './provider.js';
+import { RouterModels } from './router-models.js';
 import { OrbEvents, discussionMarkdown } from './orb-events.mjs';
 import { queueAuthority, threadMessages } from './orb-authority.mjs';
 import { MAIN_AGENT, publicAgents, validAgentId, transcriptPacket, threadTitle } from './agent-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const HOME = process.env.HOME;
-const BASE = '/mizel-live';
-const PORT = Number(process.env.MIZEL_LIVE_PORT || 8976);
+const HOME = process.env.HOME || '/data';
+const BASE = '/wizard-recorder';
+const PORT = Number(process.env.PORT || process.env.MIZEL_LIVE_PORT || 8080);
 const WEB = process.env.MIZEL_LIVE_WEB || path.join(HERE, 'web');
-const DATA = process.env.MIZEL_LIVE_DATA || path.join(HOME, '.hermes/data/apps/mizel-live');
-const UP = { host: '127.0.0.1', port: Number(process.env.MEETINGS_PORT || 8973), base: '/meetings' };
-const WIZARD_API = process.env.WIZARD_API_URL || 'http://127.0.0.1:8865';
+const DATA = process.env.RECORDER_VIEW_DATA || process.env.MIZEL_LIVE_DATA || process.env.MEETINGS_DATA_DIR || process.env.MEETINGS_DATA || '/data';
+const UP = { host: '127.0.0.1', port: Number(process.env.RECORDER_API_PORT || process.env.MEETINGS_PORT || 8081), base: '' };
+const WIZARD_API = process.env.WIZARD_API_URL || '';
 // Set to the SAME service prefix used by the orb (including /wizard/hermes).
 // Public queue run IDs must not be sent to a different raw runtime.
 const ORB_API = process.env.WIZARD_ORB_API_URL || WIZARD_API;
-const PUBLIC_ORIGINS = new Set([...(process.env.MIZEL_ALLOWED_ORIGINS || '').split(',').filter(Boolean), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+const PUBLIC_ORIGINS = new Set([...(process.env.MEETINGS_ALLOWED_ORIGINS || process.env.MIZEL_ALLOWED_ORIGINS || '').split(',').filter(Boolean), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
 // Build id of the served web app: an open client compares it and reloads itself when idle.
 const WEB_BUILD = (() => { try { const h = crypto.createHash('sha256'); for (const f of ['app.js', 'styles.css', 'index.html']) h.update(fs.readFileSync(path.join(WEB, f))); return h.digest('hex').slice(0, 12); } catch { return 'dev'; } })();
-const REALTIME_MODEL = process.env.MIZEL_LIVE_REALTIME_MODEL || 'voxtral-mini-4b-realtime';
-const SUMMARY_MODEL = process.env.MIZEL_LIVE_SUMMARY_MODEL || 'deepseek-v4-1-flash';
+const REALTIME_MODEL = 'live-transcription';
+const SUMMARY_MODEL = 'live-summary';
 const SUMMARY_EVERY_MS = 5000;    // check often; a pass runs once ~12 new words have locked in
 const SAMPLE_RATE = 16000;
 const COMMIT_MS = 6000;          // force a transcription commit at least this often while speaking
@@ -35,48 +37,60 @@ fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
 // Phone recordings (Wizard OS) never stream audio to this page: the phone writes 5 s WAV chunks and uploads
 // them to the Meetings service. In follow mode the server reads those chunks as they land and feeds them to
 // the realtime transcriber itself, so private live words work for phone recordings too.
-const MEETINGS_AUDIO = path.join(process.env.MEETINGS_DATA_DIR || path.join(HOME, '.hermes/data/apps/meetings'), 'audio');
+const MEETINGS_AUDIO = path.join(process.env.MEETINGS_DATA_DIR || process.env.MEETINGS_DATA || '/data', 'audio');
 const FOLLOW_POLL_MS = 700;        // look for a new uploaded chunk this often
 const FOLLOW_FRAME_MS = 40;        // feed a 5 s chunk as 250 ms frames, one every 40 ms (~6x real time)
 const FOLLOW_GAP_SKIP_MS = 15000;  // a missing chunk with later ones present for this long is skipped
 const FOLLOW_IDLE_CLOSE_MS = 45 * 60 * 1000;
 const STATE_PATH = path.join(DATA, 'state.json');
 const LOG_PATH = path.join(DATA, 'events.jsonl');
+const caps=capabilities();
 const orbEvents = new OrbEvents(path.join(DATA, 'orb-events.json'));
-const verifyOrbDelivery = await queueAuthority(process.env.WIZARD_ORB_QUEUE_DB);
+const verifyOrbDelivery = await queueAuthority(process.env.WIZARD_ORB_QUEUE_DB); // optional, explicit source only
 async function orbRead(route,row){const query=row.agent?`${route.includes('?')?'&':'?'}agent=${encodeURIComponent(row.agent)}`:'';
   const r=await fetch(ORB_API+route+query,{headers:{Authorization:`Bearer ${secrets.API_SERVER_KEY}`},signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('Existing orb read unavailable');return r.json();}
 async function orbMessages(row){return threadMessages(orbRead,row);}
-setInterval(() => void orbEvents.refresh((id,row)=>orbRead(`/v1/runs/${encodeURIComponent(id)}`,row),orbMessages,verifyOrbDelivery), 5000).unref();
+if (caps.orb && ORB_API && process.env.WIZARD_API_TOKEN) setInterval(() => void orbEvents.refresh((id,row)=>orbRead(`/v1/runs/${encodeURIComponent(id)}`,row),orbMessages,verifyOrbDelivery), 5000).unref();
 
-function readEnvFile(file, keys) {
-  const out = {};
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-      if (m && keys.includes(m[1])) out[m[1]] = m[2].trim().replace(/^['"]|['"]$/g, '');
-    }
-  } catch { /* missing file → empty */ }
-  return out;
+export function capabilities(env=process.env) {
+  return {realtime:!!((env.WIZARD_ROUTER_URL && env.WIZARD_ROUTER_GRANT) || env.TINFOIL_API_KEY),
+    summaries:!!((env.WIZARD_ROUTER_URL && env.WIZARD_ROUTER_GRANT) || env.TINFOIL_API_KEY),
+    agent:!!((env.WIZARD_DELIVERY_URL && env.WIZARD_DELIVERY_TOKEN) || env.WIZARD_AGENTS_URL),
+    orb:env.RECORDER_ORB_EVENTS==='1'};
 }
-const secrets = {
-  ...readEnvFile(path.join(HOME, '.hermes/.env'), ['TINFOIL_API_KEY']),
-  ...readEnvFile(path.join(HOME, '.config/wizard-mobile/runtime.env'), ['API_SERVER_KEY']),
-};
-for (const k of ['TINFOIL_API_KEY', 'API_SERVER_KEY']) if (process.env[k]) secrets[k] = process.env[k];
-const missing = ['TINFOIL_API_KEY', 'API_SERVER_KEY'].filter((k) => !secrets[k]);
-if (missing.length) { console.error(`mizel-live refused to start: missing ${missing.join(', ')}`); process.exit(1); }
-const provider = new TinfoilProvider(secrets.TINFOIL_API_KEY, null, REALTIME_MODEL, SUMMARY_MODEL);
+// Select the configured connection once; Router failures never fall back to another provider.
+const routerConfigured=!!(process.env.WIZARD_ROUTER_URL && process.env.WIZARD_ROUTER_GRANT);
+const directProvider=!routerConfigured && process.env.TINFOIL_API_KEY ? new TinfoilProvider(process.env.TINFOIL_API_KEY) : null;
+const provider=routerConfigured?new LiveClient(process.env.WIZARD_ROUTER_URL,process.env.WIZARD_ROUTER_GRANT):directProvider;
+const models=routerConfigured?new RouterModels(process.env.WIZARD_ROUTER_URL,process.env.WIZARD_ROUTER_GRANT):directProvider && {summarize:async input=>({delta:await directProvider.summarize(input),provenance:null})};
+const secrets={API_SERVER_KEY:process.env.WIZARD_API_TOKEN || ''};
+// Node fetch drops Host. Use this for every internal API read/write, including native verification.
+function apiFetch(url, opts={}) {
+  const u=new URL(url);
+  return new Promise((resolve,reject)=>{
+    const r=http.request({hostname:u.hostname,port:u.port,path:u.pathname+u.search,method:opts.method||'GET',
+      headers:{...opts.headers,host:'127.0.0.1:8080'},timeout:15000},res=>{
+      const chunks=[];let size=0;
+      res.on('data',b=>{size+=b.length;if(size>16*1024*1024)r.destroy(Error('API response too large'));else chunks.push(b);});
+      res.on('end',()=>{const text=Buffer.concat(chunks).toString();resolve({ok:res.statusCode>=200&&res.statusCode<300,status:res.statusCode,text:async()=>text,json:async()=>JSON.parse(text)});});
+    });
+    r.on('timeout',()=>r.destroy(Error('API timeout')));r.on('error',reject);r.end(opts.body);
+  });
+}
 
 // ───────────── durable state: one Live thread per recording, and its ask cards ─────────────
 let state = { threads: {}, asks: {}, summaries: {} };
 try { state = { threads: {}, asks: {}, summaries: {}, ...JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) }; } catch { /* first run */ }
+let stopped=false;
+const closingPasses=new Set();
 function save() {
+  if(stopped)return;
   const tmp = STATE_PATH + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(state, null, 1), { mode: 0o600 });
   fs.renameSync(tmp, STATE_PATH);
 }
 function logEvent(event, data = {}) {
+  if(stopped)return;
   fs.appendFileSync(LOG_PATH, JSON.stringify({ at: new Date().toISOString(), event, ...data }) + '\n', { mode: 0o600 });
 }
 const sockets = new Map(); // meetingId → Set<LiveSession>
@@ -87,17 +101,17 @@ function asksFor(meetingId) {
   return Object.values(state.asks).filter((a) => a.meetingId === meetingId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 const publicAsk = (a) => ({ id: a.id, meetingId: a.meetingId, title: a.title || '', text: a.text, status: a.status, answer: a.answer || null, error: a.error || null,
-  threadId: a.threadId || null, agent: a.agent || MAIN_AGENT, agentLabel: a.agentLabel || 'Archimedes', createdAt: a.createdAt, latency: a.latency || null, endedBy: a.endedBy || null, dismissed: !!a.dismissed });
+  threadId: a.threadId || null, runId:a.runId||null, via:a.via||'server', agent: a.agent || MAIN_AGENT, agentLabel: a.agentLabel || 'the assistant', createdAt: a.createdAt, latency: a.latency || null, endedBy: a.endedBy || null, dismissed: !!a.dismissed });
 
 
-// ───────────── Live summary: append-only topics + bullets, as in the Mizel.ai app ─────────────
+// ───────────── Live summary: append-only topics + bullets, as in the Recorder app ─────────────
 // Built from the accurate (~30 s window) transcript, not the grey live words. Anything said to
-// Archimedes is left out: it has its own cards and "Asked Archimedes" list.
-const SUMMARY_PROMPT = 'You maintain an append-only live summary of a meeting or spoken ramble. Return only JSON {"topicChanged":boolean,"title":string,"newBullets":[{"text":string,"atMs":integer}]}. "title" is a short plain-English name (2-6 words) for the topic of the newest transcript lines. Set topicChanged=true only when discussion has clearly moved to a different topic than activeTopic.title. Each new bullet is one concise, concrete point (decisions, asks, facts, ideas, open questions) in plain English, with "atMs" copied exactly from the startMs of the transcript line that best supports it. Skip filler, mic checks, and repetition. Sentences addressed to Archimedes (the AI assistant; often mis-transcribed as "our communities" or "our comedies") are requests to the assistant, not meeting content: leave them out, along with any answer text. Return [] when nothing is new. Never restate existing bullets.';
+// the assistant is left out: it has its own cards and "Asked the assistant" list.
+const SUMMARY_PROMPT = 'You maintain an append-only live summary of a meeting or spoken ramble. Return only JSON {"topicChanged":boolean,"title":string,"newBullets":[{"text":string,"atMs":integer}]}. "title" is a short plain-English name (2-6 words) for the topic of the newest transcript lines. Set topicChanged=true only when discussion has clearly moved to a different topic than activeTopic.title. Each new bullet is one concise, concrete point (decisions, asks, facts, ideas, open questions) in plain English, with "atMs" copied exactly from the startMs of the transcript line that best supports it. Skip filler, mic checks, and repetition. Sentences addressed to the assistant (the AI assistant; often mis-transcribed as "our communities" or "our comedies") are requests to the assistant, not meeting content: leave them out, along with any answer text. Return [] when nothing is new. Never restate existing bullets.';
 const summaryJobs = new Map(); // meetingId → { timer, running }
 function summaryFor(mid) { return state.summaries[mid] || null; }
 const publicSummary = (sm) => sm && ({ topics: sm.topics, updatedAt: sm.updatedAt || null, summarizedToMs: sm.summarizedToMs || 0,
-  originalLiveSummary: sm.originalLiveSummary || null });
+  originalLiveSummary: sm.originalLiveSummary || null, provenance:sm.provenance || null });
 function freezeLiveSummary(sm, capturedAt = new Date().toISOString()) {
   if (!sm || sm.originalLiveSummary || !sm.topics?.some(t => t.bullets?.length)) return false;
   sm.originalLiveSummary = { topics: JSON.parse(JSON.stringify(sm.topics)), updatedAt: sm.updatedAt || null,
@@ -105,7 +119,7 @@ function freezeLiveSummary(sm, capturedAt = new Date().toISOString()) {
   return true;
 }
 async function meetingSegments(mid) {
-  const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`);
+  const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`);
   if (!r.ok) throw new Error(`meetings ${r.status}`);
   const m = await r.json();
   return { status: m.status, segments: (m.segments || []).filter((x) => x.text && x.text.trim()) };
@@ -124,14 +138,12 @@ async function summarizeMeeting(mid, { force = false, chain = true } = {}) {
     const input = {
       activeTopic: active ? { title: active.title, bullets: active.bullets.slice(-24).map((b) => b.text) } : null,
       transcript: batch.map((x) => ({ startMs: x.start_ms, endMs: x.end_ms, speaker: ({me: 'Me', them: 'Them', mixed: 'Speaker'})[x.source] || 'Speaker', text: x.text })),
-      saidToArchimedes: askTexts,
+      saidToAgent: askTexts,
     };
     const t0 = Date.now();
-    const resp = await provider.client.chat.completions.create({
-      model: SUMMARY_MODEL, response_format: { type: 'json_object' }, temperature: 0,
-      messages: [{ role: 'system', content: SUMMARY_PROMPT + '\n' + ownerIdentityPrompt() + '\n' + noAttributionPrompt() }, { role: 'user', content: JSON.stringify(input) }],
-    });
-    const delta = parseSummaryDelta(resp.choices[0]?.message?.content || '');
+    if (!models) return;
+    const {delta,provenance}=await models.summarize({...input, saidToAgent:askTexts});
+    sm.provenance=provenance;
     const starts = batch.map((x) => x.start_ms || 0);
     const snap = (ms) => starts.reduce((best, st) => (Math.abs(st - ms) < Math.abs(best - ms) ? st : best), starts[0]);
     let target = active;
@@ -179,6 +191,7 @@ async function buildOutline(mid) {
   finally { const j = summaryJobs.get(mid); if (j) j.building = false; }
 }
 function startSummaries(mid) {
+  if(!models)return;
   const job = summaryJobs.get(mid) || {}; summaryJobs.set(mid, job);
   if (!job.timer) job.timer = setInterval(() => void summarizeMeeting(mid), SUMMARY_EVERY_MS);
 }
@@ -187,7 +200,10 @@ function stopSummaries(mid) {
   if ((sockets.get(mid)?.size || 0) > 0) return;
   clearInterval(job.timer); job.timer = null;
   // The last stretch locks in a few seconds after Stop; catch it with two closing passes.
-  for (const ms of [15000, 45000]) setTimeout(() => { if (!(sockets.get(mid)?.size)) void summarizeMeeting(mid, { force: true }); }, ms);
+  for (const ms of [15000, 45000]) {
+    const t=setTimeout(()=>{closingPasses.delete(t);if(!stopped && !(sockets.get(mid)?.size))void summarizeMeeting(mid,{force:true});},ms);
+    t.unref();closingPasses.add(t);
+  }
 }
 
 async function wizard(pathname, { method = 'GET', json, headers = {} } = {}) {
@@ -222,16 +238,15 @@ let agentCache = { at: 0, list: null };
 async function listAgents({ fresh = false } = {}) {
   if (process.env.MIZEL_LIVE_DRY === '1' && process.env.MIZEL_LIVE_DRY_AGENTS) return publicAgents(JSON.parse(process.env.MIZEL_LIVE_DRY_AGENTS));
   if (!fresh && agentCache.list && Date.now() - agentCache.at < 30000) return agentCache.list;
-  if (!AGENTS_URL) return [{ id: MAIN_AGENT, label: 'Archimedes', privacy: 'standard', status: 'running' }];
+  if (!AGENTS_URL) return [];
   const res = await fetch(AGENTS_URL, { headers: { Authorization: 'Bearer ' + secrets.API_SERVER_KEY }, signal: AbortSignal.timeout(10000) });
   if (!res.ok) throw new Error(`agents ${res.status}`);
   const list = publicAgents(await res.json());
-  if (!list.some((a) => a.id === MAIN_AGENT)) list.unshift({ id: MAIN_AGENT, label: 'Archimedes', privacy: 'standard', status: 'running' });
   agentCache = { at: Date.now(), list };
   return list;
 }
 async function resolveAgent(id) {
-  const want = id || MAIN_AGENT;
+  const want = id || (await listAgents())[0]?.id;
   if (!validAgentId(want)) throw Object.assign(new Error('Unknown agent'), { status: 400 });
   const agent = (await listAgents()).find((a) => a.id === want) || (await listAgents({ fresh: true })).find((a) => a.id === want);
   if (!agent) throw Object.assign(new Error('That agent is not available right now'), { status: 404 });
@@ -253,10 +268,10 @@ async function createAgentThread(agentId, title) {
 
 // ───────────── Finished recordings go to an agent automatically ─────────────
 // Default is always the private agent. A pick on one recording changes only that recording.
-const DEFAULT_AGENT = process.env.MIZEL_DEFAULT_AGENT || 'private';
+let DEFAULT_AGENT = process.env.RECORDER_DEFAULT_AGENT || 'none';
 const MEETING_ID = /^[A-Za-z0-9_-]{3,64}$/;
 if (!state.autoSince) { state.autoSince = new Date().toISOString(); save(); }   // older recordings are never auto-sent
-function finishRouteFor(mid) { return state.routes?.[mid] || DEFAULT_AGENT; }
+function finishRouteFor(mid) { return state.routes?.[mid] || state.defaultAgent || DEFAULT_AGENT; }
 async function readSmallJson(req, max) {
   try { const chunks = []; let bytes = 0; for await (const c of req) { bytes += c.length; if (bytes > max) return null; chunks.push(c); } const v = JSON.parse(Buffer.concat(chunks).toString('utf8')); return v && typeof v === 'object' ? v : null; }
   catch { return null; }
@@ -266,16 +281,21 @@ async function autoEligible(mid) {
   if (state.routes?.[mid]) return true;
   let started = startedCache.get(mid);
   if (!started) {
-    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(8000) }); if (r.ok) { started = (await r.json()).started_at; startedCache.set(mid, started); } } catch { /* unknown */ }
+    try { const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(8000) }); if (r.ok) { started = (await r.json()).started_at; startedCache.set(mid, started); } } catch { /* unknown */ }
   }
   return !!started && Date.parse(started) >= Date.parse(state.autoSince);
 }
-const FINISH_POLL_MS = Number(process.env.MIZEL_FINISH_POLL_MS || 15000);
+const FINISH_POLL_MS = Number(process.env.RECORDER_FINISH_POLL_MS || process.env.MIZEL_FINISH_POLL_MS || 15000);
 const SUMMARY_WAIT_MS = 5 * 60 * 1000;
 const finishSeen = new Map(); // meetingId → first time seen ready
+let finishSweep=false;
 async function deliverFinished() {
+  if(finishSweep || stopped)return;
+  finishSweep=true;
+  try {
   let list;
-  try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings?limit=30`, { signal: AbortSignal.timeout(10000) }); if (!r.ok) return; list = (await r.json()).meetings || []; }
+  if(DEFAULT_AGENT==='none'){const available=await listAgents().catch(()=>[]);DEFAULT_AGENT=available.find(a=>a.privacy==='private')?.id || state.defaultAgent || 'none';}
+  try { const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings?limit=30`, { signal: AbortSignal.timeout(10000) }); if (!r.ok) return; list = (await r.json()).meetings || []; }
   catch { return; }
   state.delivered = state.delivered || {};
   for (const m of list) {
@@ -285,12 +305,12 @@ async function deliverFinished() {
     if (route === 'none') continue;
     if (!finishSeen.has(m.id)) finishSeen.set(m.id, Date.now());
     let detail;
-    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(m.id)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) continue; detail = await r.json(); }
+    try { const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(m.id)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) continue; detail = await r.json(); }
     catch { continue; }
     const busy = detail.jobs?.enhance === 'running' || (detail.jobs?.transcribe_pending || 0) > 0;
     if (busy && Date.now() - finishSeen.get(m.id) < SUMMARY_WAIT_MS) continue;   // wait for the full transcript and summary
     const visible = (await listAgents().catch(() => [])).find((a) => a.id === route);
-    if (!visible) {   // the private agent: only the owner's own device may open it, so the Mizel client sends it
+    if (!visible || visible.privacy==='private' || !ORB_API) {   // the private agent: only the owner's own device may open it, so the Recorder client sends it
       if (!state.due?.[m.id]) { state.due = { ...(state.due || {}), [m.id]: { agent: route, at: new Date().toISOString() } }; save(); logEvent('finish.due', { meetingId: m.id, agent: route }); }
       continue;
     }
@@ -303,6 +323,7 @@ async function deliverFinished() {
     await sendRecording(send);
     if (send.status === 'sent' || tries >= 3) { state.delivered[m.id] = send.id; save(); }
   }
+  } finally {finishSweep=false;}
 }
 setInterval(() => void deliverFinished().catch((e) => logEvent('finish.error', { error: String(e?.message || e).slice(0, 200) })), FINISH_POLL_MS).unref();
 
@@ -311,7 +332,7 @@ const publicSend = (x) => ({ id: x.id, meetingId: x.meetingId, agent: x.agent, a
 async function sendRecording(send) {
   const mid = send.meetingId;
   try {
-    const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) });
+    const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) });
     if (!r.ok) throw new Error(`recording unavailable (${r.status})`);
     const meeting = await r.json();
     const packet = transcriptPacket({ meeting, summary: summaryFor(mid), note: send.note, agentLabel: send.agentLabel });
@@ -335,8 +356,8 @@ async function liveThreadFor(meetingId, title) {
   if (state.threads[meetingId]) return state.threads[meetingId];
   const id = `wizard_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
   // Thread titles must be unique in Wizard, and most recordings start as "Untitled meeting",
-  // so the title carries the Bangkok start time (plus a short tag if that still clashes).
-  const when = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  // so the title carries the configured local start time (plus a short tag if that still clashes).
+  const when = new Intl.DateTimeFormat('en-GB', { timeZone: process.env.TZ || 'UTC', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   const base = `Live · ${(title || 'Recording').slice(0, 50)} · ${when}`;
   const candidates = [base, `${base} · ${meetingId.slice(-4)}`, `${base} · ${crypto.randomBytes(3).toString('hex')}`];
   for (let i = 0; i < candidates.length; i++) {
@@ -355,14 +376,14 @@ async function dispatchAsk(ask, title) {
   if (ask.origin !== 'manual-button') throw new Error('Automatic recording dispatch is disabled');
   if (process.env.MIZEL_LIVE_DRY === '1') {   // QA instance only: no Wizard thread or run
     await new Promise((r) => setTimeout(r, 300));
-    ask.status = 'answered'; ask.answer = process.env.MIZEL_LIVE_DRY_LONG ? ('[dry run] long answer. ' + 'Here is a longer paragraph to check scrolling in the full answer sheet on a phone. '.repeat(40)) : '[dry run] would ask Archimedes'; save();
+    ask.status = 'answered'; ask.answer = process.env.MIZEL_LIVE_DRY_LONG ? ('[dry run] long answer. ' + 'Here is a longer paragraph to check scrolling in the full answer sheet on a phone. '.repeat(40)) : '[dry run] would ask the assistant'; save();
     return broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
   }
-  const routed = ask.agent && ask.agent !== MAIN_AGENT;
+  const routed = !!ask.agent;
   const call = routed ? (pathname, opts = {}) => orbCall(pathname, { ...opts, agent: ask.agent }) : wizard;
-  const who = ask.agentLabel || 'Archimedes';
+  const who = ask.agentLabel || 'the assistant';
   try {
-    const threadId = routed ? await createAgentThread(ask.agent, `Mizel.ai · Ask → ${who}`) : await liveThreadFor(ask.id, 'Mizel.ai · Manual ask');
+    const threadId = routed ? await createAgentThread(ask.agent, `Recorder · Ask → ${who}`) : await liveThreadFor(ask.id, 'Recorder · Manual ask');
     ask.threadId = threadId; save();
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
     const run = await call('/v1/runs', { method: 'POST', json: { session_id: threadId, input: promptFor(ask, title) }, headers: { 'Idempotency-Key': ask.id } });
@@ -413,7 +434,7 @@ class LiveSession {
     this.consumed = 0;           // offset in finals+partial already judged
     this.audioBytes = 0; this.lastCommitBytes = 0; this.lastCommitAt = Date.now();
     this.judging = false; this.rejudge = false; this.idleTimer = null; this.unfinishedSince = 0;
-    this.pending = null;         // a request Archimedes is still listening to
+    this.pending = null;         // a request the assistant is still listening to
     this.lastWordsAt = 0;
   }
   send(msg) { if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg)); }
@@ -435,6 +456,7 @@ class LiveSession {
     if (this.closed || this.stream || this.opening) return;
     this.opening = true;
     try {
+      if(!provider)throw Error('Connection Router live transcription is not configured');
       this.stream = await provider.openRealtime({
         delta: (t) => this.onDelta(t), completed: (t) => this.onCompleted(t), error: (e) => this.onProviderError(e),
       });
@@ -547,9 +569,14 @@ class LiveSession {
 
   }
   onCompleted(text) {
-    const t = String(text || this.partial).replace(/\s+/g, ' ').trim();
+    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
     const before = this.finals.length;
-    if (t) this.send({ type: 'settled', text: t, startMs: (this.baseMs || 0) + this.segStartMs, endMs: (this.baseMs || 0) + this.audioMs });
+    if (t) {
+      const utterance={text:t,startMs:(this.baseMs||0)+this.segStartMs,endMs:(this.baseMs||0)+this.audioMs};
+      // Caption archive is separate from the durable batch transcript (never duplicated into segments).
+      try{const dir=path.join(DATA,'live');fs.mkdirSync(dir,{recursive:true});fs.appendFileSync(path.join(dir,this.meetingId+'.jsonl'),JSON.stringify(utterance)+'\n');}catch{logEvent('live.archive_unavailable',{meetingId:this.meetingId});}
+      this.send({type:'settled',...utterance});
+    }
     this.segStartMs = this.audioMs;
     if (t) this.finals = (this.finals ? `${this.finals} ` : '') + t;
     // Offsets into the partial region keep their meaning once it settles.
@@ -561,6 +588,8 @@ class LiveSession {
   }
   onProviderError(error) {
     logEvent('provider.error', { meetingId: this.meetingId, error: String(error?.message || error?.error?.message || 'provider connection dropped').slice(0, 240), status: error?.status || null, code: error?.code || null });
+    this.partial = ''; this.segStartMs = this.audioMs;
+    this.send({ type: 'words', partial: '', startMs: (this.baseMs || 0) + this.segStartMs });
     this.send({ type: 'status', live: false, retrying: true, reason: 'Live words dropped out, recording continues. Reconnecting…' });
     const dead = this.stream; this.stream = null; safeClose(dead, this.meetingId);
     // Reopen on the same socket: follow mode keeps reading uploaded chunks, socket audio is held meanwhile.
@@ -589,7 +618,7 @@ class LiveSession {
     clearInterval(this.commitTimer); clearInterval(this.followTimer); clearTimeout(this.idleTimer); clearTimeout(this.reopenTimer);
     try { this.stream?.commit(); } catch { /* ignore */ }
     const stream = this.stream;
-    setTimeout(() => safeClose(stream, this.meetingId), 4000);
+    safeClose(stream, this.meetingId);
     sockets.get(this.meetingId)?.delete(this);
     if (this.meetingId) stopSummaries(this.meetingId);
     logEvent('live.closed', { meetingId: this.meetingId, audioMs: this.audioMs });
@@ -599,28 +628,42 @@ class LiveSession {
 // ───────────── HTTP: static view + Meetings API proxy ─────────────
 const TYPES = { js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml', png: 'image/png', webmanifest: 'application/manifest+json', json: 'application/json', html: 'text/html; charset=utf-8' };
 const HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization', 'proxy-authenticate', 'host']);
+function safeOrigin(req){
+  if(req.headers['sec-fetch-site']==='cross-site')return false;
+  if(!req.headers.origin)return true;
+  try{return PUBLIC_ORIGINS.has(req.headers.origin)||new URL(req.headers.origin).host===req.headers.host;}catch{return false;}
+}
 function sendRaw(res, code, body, type = 'text/plain', extra = {}) {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...extra });
   res.end(body);
 }
-const server = http.createServer(async (req, res) => {
+export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   let p = url.pathname;
   if (p === BASE) return sendRaw(res, 308, '', 'text/plain', { Location: BASE + '/' });
   if (p.startsWith(BASE + '/')) p = p.slice(BASE.length);
-  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true, agentRouter: true, build: WEB_BUILD }), 'application/json');
+  if(!['GET','HEAD','OPTIONS'].includes(req.method) && !safeOrigin(req))return sendRaw(res,403,'forbidden');
+  if(p==='/capabilities.js')return sendRaw(res,200,'window.RecorderCapabilities='+JSON.stringify(caps)+';','text/javascript');
+  if(p==='/orb-events' && !caps.orb)return sendRaw(res,404,'Orb events are disabled');
+  if(p==='/agent-default' && req.method==='POST'){
+    const msg=await readSmallJson(req,4000);
+    if(!msg || (msg.agent!=='none' && !validAgentId(msg.agent)))return sendRaw(res,400,'Invalid agent');
+    // Only the owner's client selects this from its installed shell registry. It confers no server authority.
+    state.defaultAgent=msg.agent;save();return sendRaw(res,200,JSON.stringify({default:state.defaultAgent}),'application/json');
+  }
+  if (p === '/live-health') return sendRaw(res, 200, JSON.stringify({ ok: true, realtimeModel: REALTIME_MODEL, summaryModel: SUMMARY_MODEL, wakeWord: false, automaticDispatch: false, manualAsk: true, agentRouter: true, build: WEB_BUILD, ...caps }), 'application/json');
   if (p === '/orb-events' && req.method === 'GET') {
     const mid=url.searchParams.get('meetingId');
     return sendRaw(res,200,JSON.stringify({events:orbEvents.list(mid),discussions:discussionMarkdown(orbEvents.list(mid))}),'application/json');
   }
   if (p === '/orb-events' && req.method === 'PUT') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res,403,'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res,403,'forbidden');
     try {
       const chunks=[];let bytes=0;
       for await(const c of req){bytes+=c.length;if(bytes>100000)return sendRaw(res,413,'too large');chunks.push(c);}
       const value=JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if(typeof value?.meetingId!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(value.meetingId))throw Error('Invalid meeting id');
-      const verified=await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(value.meetingId)}`,{signal:AbortSignal.timeout(10000)});
+      const verified=await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(value.meetingId)}`,{signal:AbortSignal.timeout(10000)});
       if(!verified.ok||(await verified.json())?.id!==value.meetingId)throw Error('Existing meeting could not be verified');
       const event=orbEvents.upsert(value);
       return sendRaw(res,200,JSON.stringify({event}),'application/json');
@@ -629,19 +672,19 @@ const server = http.createServer(async (req, res) => {
   const exportMatch=/^\/api\/meetings\/([A-Za-z0-9_-]+)\/export.md$/.exec(p);
   const deleteMatch=/^\/api\/meetings\/([A-Za-z0-9_-]+)$/.exec(p);
   if(deleteMatch && req.method==='DELETE'){
-    if(!req.headers.origin||!PUBLIC_ORIGINS.has(req.headers.origin))return sendRaw(res,403,'forbidden');
-    try{const upstream=await fetch(`http://${UP.host}:${UP.port}${UP.base}${p}`,{method:'DELETE'});
+    if(!safeOrigin(req))return sendRaw(res,403,'forbidden');
+    try{const upstream=await apiFetch(`http://${UP.host}:${UP.port}${UP.base}${p}`,{method:'DELETE'});
       if(upstream.ok||upstream.status===404){orbEvents.save(Object.fromEntries(Object.entries(orbEvents.rows).filter(([,row])=>row.meetingId!==deleteMatch[1])));return sendRaw(res,200,JSON.stringify({ok:true}),'application/json');}
       return sendRaw(res,upstream.status,await upstream.text(),'application/json');
     }catch{return sendRaw(res,502,'Meeting deletion could not be confirmed');}
   }
   if(exportMatch && req.method==='GET') {
-    try {const upstream=await fetch(`http://${UP.host}:${UP.port}${UP.base}${p}`);
+    try {const upstream=await apiFetch(`http://${UP.host}:${UP.port}${UP.base}${p}`);
       return sendRaw(res,upstream.status,(await upstream.text())+(upstream.ok?discussionMarkdown(orbEvents.list(exportMatch[1])):''),'text/markdown; charset=utf-8');
     }catch{return sendRaw(res,502,'Meeting export unavailable');}
   }
   if (p === '/manual-ask' && req.method === 'POST') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     let chunks = []; let bytes = 0; let overflow = false;
     req.on('data', (chunk) => {
       if (overflow) return;
@@ -658,16 +701,32 @@ const server = http.createServer(async (req, res) => {
       // Payload allowlist: context, transcript, title, and legacy wake fields are ignored.
       if (msg.agent !== undefined && !validAgentId(msg.agent)) return sendRaw(res, 400, 'unknown agent');
       let agent;
-      try { agent = await resolveAgent(msg.agent); } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); }
-      const ask = { id: `ask_${crypto.randomUUID()}`, meetingId: mid, title: 'Manual ask', text, context: '', origin: 'manual-button', status: 'working', createdAt: new Date().toISOString(), agent: agent.id, agentLabel: agent.label };
+      if(msg.device===true){
+        if(!validAgentId(msg.agent))return sendRaw(res,400,'Invalid installed agent');
+        agent={id:msg.agent,label:String(msg.agentLabel||msg.agent).slice(0,60)};
+      }else try { agent = await resolveAgent(msg.agent); } catch (e) { return sendRaw(res, e.status || 502, JSON.stringify({ error: e.message }), 'application/json'); }
+      const ask = { id: `ask_${crypto.randomUUID()}`, meetingId: mid, title: 'Manual ask', text, context: '', origin: 'manual-button', status: 'working', createdAt: new Date().toISOString(), agent: agent.id, agentLabel: agent.label, ...(msg.device===true?{via:'device'}:{}) };
       rememberAgent(mid, agent.id);
       state.asks[ask.id] = ask; save();
       logEvent('ask.manual', { askId: ask.id, meetingId: mid });
       broadcast(mid, { type: 'ask', ask: publicAsk(ask) });
       sendRaw(res, 202, JSON.stringify({ ask: publicAsk(ask) }), 'application/json');
-      void dispatchAsk(ask, 'Manual ask');
+      if(ask.via!=='device')void dispatchAsk(ask, 'Manual ask');
     });
     return;
+  }
+  if(p==='/manual-ask/result' && req.method==='POST'){
+    const msg=await readSmallJson(req,12000),ask=state.asks[msg?.askId];
+    if(!ask || ask.via!=='device' || ask.origin!=='manual-button')return sendRaw(res,404,'Unknown device ask');
+    if(ask.status==='cancelled')return sendRaw(res,409,'Cancelled');
+    if(msg.threadId && !/^[A-Za-z0-9_.:-]{3,120}$/.test(msg.threadId))return sendRaw(res,400,'Invalid thread');
+    if(ask.threadId && msg.threadId && ask.threadId!==msg.threadId)return sendRaw(res,409,'Thread identity conflict');
+    if(msg.threadId)ask.threadId=msg.threadId;
+    if(msg.runId)ask.runId=String(msg.runId).slice(0,120);
+    if(msg.status==='answered' && typeof msg.answer==='string'){ask.status='answered';ask.answer=msg.answer.slice(0,6000);}
+    else if(msg.status==='failed'){ask.status='failed';ask.error=String(msg.error||'Device send failed').slice(0,300);}
+    save();broadcast(ask.meetingId,{type:'ask',ask:publicAsk(ask)});
+    return sendRaw(res,200,JSON.stringify({ask:publicAsk(ask)}),'application/json');
   }
   if (p === '/finish-route' && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId') || '';
@@ -676,28 +735,28 @@ const server = http.createServer(async (req, res) => {
     const route = finishRouteFor(mid);
     const deliveredId = state.delivered?.[mid];
     const sent = deliveredId ? publicSend(state.sends?.[deliveredId] || {}) : null;
-    return sendRaw(res, 200, JSON.stringify({ route, isDefault: !state.routes?.[mid], default: DEFAULT_AGENT, eligible: await autoEligible(mid), sent: sent?.status === 'sent' ? sent : null, last: sends[0] || null, due: !!state.due?.[mid], sends }), 'application/json');
+    return sendRaw(res, 200, JSON.stringify({ route, isDefault: !state.routes?.[mid], default: state.defaultAgent || DEFAULT_AGENT, eligible: await autoEligible(mid), sent: sent?.status === 'sent' ? sent : null, last: sends[0] || null, due: !!state.due?.[mid], sends }), 'application/json');
   }
   if (p === '/finish-route' && req.method === 'POST') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
     if (typeof msg.meetingId !== 'string' || !MEETING_ID.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
     const id = msg.agent === 'none' ? 'none' : String(msg.agent || '');
     if (id !== 'none' && !validAgentId(id)) return sendRaw(res, 400, JSON.stringify({ error: 'Unknown agent' }), 'application/json');
     // Only this recording changes. The default (the private agent) never does.
     state.routes = state.routes || {};
-    if (id === DEFAULT_AGENT) delete state.routes[msg.meetingId]; else state.routes[msg.meetingId] = id;
+    if (id === (state.defaultAgent || DEFAULT_AGENT)) delete state.routes[msg.meetingId]; else state.routes[msg.meetingId] = id;
     if (state.due?.[msg.meetingId]) state.due[msg.meetingId].agent = id;
     save(); logEvent('finish.route', { meetingId: msg.meetingId, agent: id });
-    return sendRaw(res, 200, JSON.stringify({ route: finishRouteFor(msg.meetingId), isDefault: !state.routes[msg.meetingId], default: DEFAULT_AGENT }), 'application/json');
+    return sendRaw(res, 200, JSON.stringify({ route: finishRouteFor(msg.meetingId), isDefault: !state.routes[msg.meetingId], default: state.defaultAgent || DEFAULT_AGENT }), 'application/json');
   }
-  // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Mizel client.
+  // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Recorder client.
   if (p === '/deliveries/due' && req.method === 'GET') {
     const due = Object.entries(state.due || {}).filter(([mid, d]) => d.agent && d.agent !== 'none' && !state.delivered?.[mid]).map(([mid, d]) => ({ meetingId: mid, agent: d.agent }));
     return sendRaw(res, 200, JSON.stringify({ due }), 'application/json');
   }
   if (p === '/deliveries/claim' && req.method === 'POST') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
     if (typeof msg.meetingId !== 'string' || !MEETING_ID.test(msg.meetingId)) return sendRaw(res, 400, 'meetingId required');
     const mid = msg.meetingId; const manual = msg.manual === true;
@@ -708,7 +767,7 @@ const server = http.createServer(async (req, res) => {
     if (lease && Date.now() - lease.at < 120000) return sendRaw(res, 409, JSON.stringify({ error: 'Another device is sending it' }), 'application/json');
     const label = typeof msg.agentLabel === 'string' && msg.agentLabel.trim() ? msg.agentLabel.trim().slice(0, 60) : agentId;
     let meeting;
-    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) throw new Error(String(r.status)); meeting = await r.json(); }
+    try { const r = await apiFetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) throw new Error(String(r.status)); meeting = await r.json(); }
     catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Recording unavailable (${e.message})` }), 'application/json'); }
     const packet = transcriptPacket({ meeting, summary: summaryFor(mid), note: '', agentLabel: label });
     state.sends = state.sends || {};
@@ -718,7 +777,7 @@ const server = http.createServer(async (req, res) => {
     return sendRaw(res, 200, JSON.stringify({ sendId: send.id, agent: agentId, title: threadTitle(packet.title, label), text: packet.text }), 'application/json');
   }
   if (p === '/deliveries/result' && req.method === 'POST') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     const msg = await readSmallJson(req, 4000); if (!msg) return sendRaw(res, 400, 'bad JSON');
     const send = state.sends?.[msg.sendId];
     if (!send || send.via !== 'device' || send.status !== 'sending') return sendRaw(res, 404, 'unknown send');
@@ -735,7 +794,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const agents = await listAgents();
       const pick = [state.routes?.[mid], state.lastAgent, MAIN_AGENT].find((id) => id && agents.some((a) => a.id === id));
-      return sendRaw(res, 200, JSON.stringify({ agents, selected: pick || MAIN_AGENT }), 'application/json');
+      return sendRaw(res, 200, JSON.stringify({ agents, deviceOnly:!ORB_API, selected: pick || agents[0]?.id || null }), 'application/json');
     } catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Agents unavailable: ${String(e.message || e).slice(0, 120)}` }), 'application/json'); }
   }
   if (p === '/sends' && req.method === 'GET') {
@@ -744,7 +803,7 @@ const server = http.createServer(async (req, res) => {
     return sendRaw(res, 200, JSON.stringify({ sends: list }), 'application/json');
   }
   if (p === '/send' && req.method === 'POST') {
-    if (!req.headers.origin || !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     let msg;
     try {
       const chunks = []; let bytes = 0;
@@ -770,9 +829,10 @@ const server = http.createServer(async (req, res) => {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit).map(publicAsk);
     return sendRaw(res, 200, JSON.stringify({ asks: list }), 'application/json');
   }
-  if (p === '/summary' && req.method === 'GET') {
+  if ((p === '/summary' || p === '/api/live-summary') && req.method === 'GET') {
     const mid = url.searchParams.get('meetingId') || '';
     if (!/^[A-Za-z0-9_-]{3,64}$/.test(mid)) return sendRaw(res, 400, JSON.stringify({ error: 'meetingId required' }), 'application/json');
+    if(models && url.searchParams.get('build')!=='1')await summarizeMeeting(mid,{force:true,chain:false});
     // Finished recordings (phone, browser or imported) get the same topic outline, built once on first open.
     let building = false;
     if (url.searchParams.get('build') === '1' && !(sockets.get(mid)?.size)) {
@@ -780,20 +840,21 @@ const server = http.createServer(async (req, res) => {
       if (job?.running) building = true;
       else if (!sm || !sm.complete) { building = true; void buildOutline(mid); }
     }
-    return sendRaw(res, 200, JSON.stringify({ summary: publicSummary(summaryFor(mid)), live: (sockets.get(mid)?.size || 0) > 0, building }), 'application/json');
+    return sendRaw(res, 200, JSON.stringify({ configured:!!models, summary: publicSummary(summaryFor(mid)), live: (sockets.get(mid)?.size || 0) > 0, building }), 'application/json');
   }
   const dm = /^\/asks\/(ask_[A-Za-z0-9-]{8,64})\/(dismiss|restore)$/.exec(p);
   if (dm && req.method === 'POST') {
-    if (req.headers.origin && !PUBLIC_ORIGINS.has(req.headers.origin)) return sendRaw(res, 403, 'forbidden');
+    if (!safeOrigin(req)) return sendRaw(res, 403, 'forbidden');
     const ask = state.asks[dm[1]];
     if (!ask) return sendRaw(res, 404, JSON.stringify({ error: 'not found' }), 'application/json');
     ask.dismissed = dm[2] === 'dismiss'; save();
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
     return sendRaw(res, 200, JSON.stringify({ ask: publicAsk(ask) }), 'application/json');
   }
-  if (p.startsWith('/api/')) {
+  if (p.startsWith('/api/') || ['/mcp','/healthz'].includes(p)) {
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k.toLowerCase())) headers[k] = v;
+    headers.host='127.0.0.1:8080';delete headers.origin;
     if (headers.origin && /^http:\/\/(127\.0\.0\.1|localhost):/.test(headers.origin)) headers.origin = `http://127.0.0.1:${UP.port}`;
     const up = http.request({ host: UP.host, port: UP.port, method: req.method, path: UP.base + p + url.search, headers }, (r) => {
       const h = {};
@@ -806,7 +867,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (!['GET', 'HEAD'].includes(req.method)) return sendRaw(res, 405, 'method not allowed');
   const name = p === '/' || p === '' ? 'index.html' : p.replace(/^\//, '');
-  if (!/^[\w-][\w.-]*\.(js|css|svg|png|webmanifest|json|html)$/.test(name)) return sendRaw(res, 404, 'not found');
+  if (!/^(?:core\/)?[\w-][\w.-]*\.(js|css|svg|png|webmanifest|json|html)$/.test(name)) return sendRaw(res, 404, 'not found');
   const f = path.join(WEB, name);
   if (!fs.existsSync(f)) return sendRaw(res, 404, 'not found');
   sendRaw(res, 200, req.method === 'HEAD' ? '' : fs.readFileSync(f), TYPES[name.split('.').pop()]);
@@ -815,6 +876,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 server.on('upgrade', (req, socket, head) => {
   const p = new URL(req.url, 'http://x').pathname;
+  if(!caps.realtime)return socket.destroy();
   if (p !== BASE + '/live' && p !== '/live') { socket.end('HTTP/1.1 404 Not Found\r\n\r\n'); return; }
   const origin = req.headers.origin;
   if (origin && !PUBLIC_ORIGINS.has(origin)) { socket.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
@@ -833,5 +895,10 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('error', () => s.close());
   });
 });
-server.listen(PORT, '127.0.0.1', () => console.log(`mizel-live listening on 127.0.0.1:${PORT}${BASE}/ (realtime ${REALTIME_MODEL}, button-only, summary ${SUMMARY_MODEL})`));
+server.on('close',()=>{
+  stopped=true;
+  for(const t of closingPasses)clearTimeout(t);closingPasses.clear();
+  for(const job of summaryJobs.values())clearInterval(job.timer);
+});
+if(process.env.NODE_ENV!=='test')server.listen(PORT,process.env.HOST||'0.0.0.0');
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { server.close(); process.exit(0); });

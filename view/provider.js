@@ -15,7 +15,7 @@ export class TinfoilProvider {
     if (this.injected || !/pinning|attest|certificate|Connection error/i.test(text)) return false;
     if (Date.now() - (this.refreshedAt || 0) < 60000) return false;
     this.refreshedAt = Date.now(); this.client = new TinfoilAI({ apiKey: this.apiKey });
-    console.error('mizel-live: re-attesting Tinfoil client after: ' + text.trim().slice(0, 120));
+    console.error('recorder: re-attesting Tinfoil client after: ' + text.trim().slice(0, 120));
     return true;
   }
   async openRealtime(handlers) {

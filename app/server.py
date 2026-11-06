@@ -1,4 +1,4 @@
-"""Mizel.ai recorder: live recorder behavior with portable storage and MCP.
+"""Recorder recorder: live recorder behavior with portable storage and MCP.
 
 Owner integrations are explicit environment configuration. Fresh installs are empty.
 Derived from live recorder e4c46d1 + cf610d3; native chunk/stop contracts retained.
@@ -24,19 +24,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+from model_client import model_configured, model_run
+from migrate_data import resolve_audio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
-BASE = "/meetings"
-HOME = Path.home()
+BASE = "/wizard-recorder"
 DATA = Path(os.environ.get("MEETINGS_DATA_DIR", os.environ.get("MEETINGS_DATA", "/data")))
 WEB = Path(os.environ.get("MEETINGS_WEB_DIR", Path(__file__).resolve().parent.parent / "web"))
-STT_URL = os.environ.get("MEETINGS_STT_URL", os.environ.get("TRANSCRIPTION_URL", ""))
-LLM_URL = os.environ.get("MEETINGS_LLM_URL", "")
-LLM_MODEL = os.environ.get("MEETINGS_LLM_MODEL", "glm-5-3")
-LLM_FAST_MODEL = os.environ.get("MEETINGS_LLM_FAST_MODEL", "glm-5-3-flash")
+STT_URL = os.environ.get("MEETINGS_STT_URL", os.environ.get("TRANSCRIPTION_URL", "http://transcriber:8000/v1/audio/transcriptions"))
 MIZEL_EXPORTS = Path(os.environ.get("MEETINGS_MIZEL_EXPORTS", DATA / "imports/mizel"))
 ANARLOG_MEETINGS = Path(os.environ.get("MEETINGS_ANARLOG_DIR", DATA / "imports/anarlog"))
 CALENDAR_ACCOUNT = os.environ.get("MEETINGS_CALENDAR_ACCOUNT", "")
@@ -48,10 +46,6 @@ TEMPLATES = {
     "sales": ["Context", "Pain points", "Current solution", "Budget and timing", "Objections", "Next steps"],
 }
 SOURCE_LABEL = {"me": "Me", "them": "Them", "mixed": "Speaker"}
-
-
-def _llm_key() -> str:
-    return os.environ.get("MEETINGS_LLM_KEY", os.environ.get("TINFOIL_API_KEY", ""))
 
 
 def now_iso() -> str:
@@ -397,25 +391,7 @@ def meeting_detail(c: sqlite3.Connection, mid: str) -> dict[str, Any]:
 
 async def llm(messages: list[dict[str, str]], *, model: str | None = None, max_tokens: int = 3000,
               timeout: float = 180) -> str:
-    """Call the private LLM. Reasoning models can spend the whole budget thinking and return
-    empty content (finish_reason=length); retry once with a larger budget and low effort,
-    and raise rather than ever returning an empty answer."""
-    budget = max_tokens + 6000
-    for attempt in range(2):
-        async with httpx.AsyncClient(timeout=timeout + 60 * attempt) as client:
-            r = await client.post(LLM_URL, headers={"Authorization": f"Bearer {_llm_key()}"}, json={
-                "model": model or LLM_MODEL, "messages": messages, "max_tokens": budget, "temperature": 0.2,
-                "reasoning_effort": "low",
-            })
-            r.raise_for_status()
-            data = r.json()
-        ch = data["choices"][0]
-        text = re.sub(r"<think>.*?</think>", "", ch["message"].get("content") or "", flags=re.S).strip()
-        if text:
-            return text
-        log.warning("llm returned empty content (finish=%s, usage=%s); retrying", ch.get("finish_reason"), data.get("usage"))
-        budget *= 2
-    raise RuntimeError("the private model returned no answer (it ran out of thinking budget); try again")
+    return await model_run(messages, feature="recap", max_tokens=max_tokens, timeout=timeout)
 
 
 def fmt_ms(ms: int) -> str:
@@ -493,6 +469,7 @@ async def run_enhance(mid: str, template: str) -> None:
                 + f"\n<user_notes>\n{notes or '(none)'}\n</user_notes>\n\n<transcript>\n{tx or '(no transcript)'}\n</transcript>")
         md = await llm([{"role": "system", "content": ENHANCE_SYSTEM.format(sections=sections, owner_identity=owner_identity_prompt())},
                         {"role": "user", "content": user}], max_tokens=4000)
+        provenance = getattr(md, "provenance", {})
         # Mark the user's own lines so the view can style them as "yours".
         own = {re.sub(r"^[-*#\s]+", "", l).strip().lower() for l in notes.splitlines() if l.strip()}
         out_lines = []
@@ -504,7 +481,7 @@ async def run_enhance(mid: str, template: str) -> None:
         evidence = [{"ref": f"E{n}", "segment_id": refs[f"E{n}"]["segment_id"], "start_ms": refs[f"E{n}"]["start_ms"],
                      "quote": refs[f"E{n}"]["text"][:400]} for n in used if f"E{n}" in refs]
         title_m = re.match(r"^\s*# (.+)$", md.replace(USER_MARK, ""), re.M)
-        enhanced = {"template": template, "markdown": md, "created_at": now_iso(), "model": LLM_MODEL, "evidence": evidence}
+        enhanced = {"template": template, "markdown": md, "created_at": now_iso(), "model": provenance.get("model"), "provenance": provenance, "evidence": evidence}
         with closing(db()) as c:
             row = c.execute("SELECT title, source, calendar_json, started_at FROM meetings WHERE id=?", (mid,)).fetchone()
             new_title = row["title"]
@@ -605,9 +582,8 @@ class NoSpeech(Exception):
 async def stt(client: httpx.AsyncClient, data: bytes, depth: int = 0, prompt: str = "") -> str:
     try:
         r = await client.post(STT_URL, files={"file": ("chunk.wav", data, "audio/wav")},
-                              data={"mode": "meeting", **({"prompt": prompt} if prompt else {})})
-        if r.status_code == 422:
-            return ""
+                              data={"model": os.environ.get("TRANSCRIPTION_MODEL", "Systran/faster-whisper-small"),
+                                    "response_format": "json", **({"prompt": prompt} if prompt else {})})
         if r.status_code == 502 and "no transcript" in r.text:
             return ""
         r.raise_for_status()
@@ -631,7 +607,7 @@ WINDOW_TARGET_MS = 30_000      # transcribe once this much audio is waiting…
 WINDOW_MIN_CUT_MS = 18_000     # …cutting at the quietest point between 18 s and 30 s
 WINDOW_IDLE_S = 12.0           # or when no new chunk has arrived for this long (pause)
 WINDOW_PROMPT = ("Verbatim transcript of a recorded conversation. The speaker sometimes addresses an AI "
-                 "assistant named Archimedes; transcribe those words exactly and never answer them.")
+                 "assistant named the assistant; transcribe those words exactly and never answer them.")
 
 
 def _quietest_cut(pcm: bytes, lo_ms: int, hi_ms: int) -> int:
@@ -655,7 +631,7 @@ def _wav_bytes(pcm: bytes, rate: int = 16000) -> bytes:
 
 
 def _pcm_of(path: str) -> tuple[bytes, int]:
-    with wave.open(path) as w:
+    with wave.open(str(resolve_audio(DATA, path))) as w:
         if w.getnchannels() != 1 or w.getsampwidth() != 2:
             raise RuntimeError("unexpected chunk format")
         return w.readframes(w.getnframes()), w.getframerate()
@@ -685,7 +661,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
                 run.append(k)
             pcm = b""; rate = 16000; skip = 0
             for i, k in enumerate(run):
-                data, rate = _pcm_of(k["path"])
+                data, rate = _pcm_of(str(resolve_audio(DATA, k["path"])))
                 if i == 0 and k["start_ms"] < cursor_ms < k["start_ms"] + k["duration_ms"]:
                     skip = (cursor_ms - k["start_ms"]) * rate // 1000 * 2
                     data = data[skip:]
@@ -693,7 +669,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
             if rate != 16000:
                 continue
             total_ms = len(pcm) // 32
-            last_arrival = max(os.path.getmtime(k["path"]) for k in run)
+            last_arrival = max(resolve_audio(DATA, k["path"]).stat().st_mtime for k in run)
             flushing = g["status"] != "recording" or (now - last_arrival) > WINDOW_IDLE_S or len(run) < len(chunks)
             if total_ms < WINDOW_TARGET_MS and not flushing:
                 continue
@@ -761,7 +737,7 @@ async def transcription_worker(stop: asyncio.Event) -> None:
                 continue
             key = (job["meeting_id"], job["source"], job["seq"])
             try:
-                text = await stt(client, Path(job["path"]).read_bytes())
+                text = await stt(client, resolve_audio(DATA, job["path"]).read_bytes())
                 with closing(db()) as c:
                     if text:
                         c.execute(
@@ -840,7 +816,7 @@ async def maybe_finalize() -> None:
             reindex(c, r["id"])
             has = c.execute("SELECT notes<>'' OR EXISTS(SELECT 1 FROM segments WHERE meeting_id=?) FROM meetings WHERE id=?",
                             (r["id"], r["id"])).fetchone()[0]
-            if has:
+            if has and model_configured():
                 c.execute("UPDATE meetings SET enhance_state='running' WHERE id=?", (r["id"],))
                 start_bg(run_enhance(r["id"], "general"))
 
@@ -856,7 +832,7 @@ def start_bg(coro) -> None:
 
 # ---------------------------------------------------------------- app
 
-app = FastAPI(title="Meetings", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Recorder", docs_url=None, redoc_url=None, openapi_url=None)
 _stop = asyncio.Event()
 
 
@@ -868,10 +844,10 @@ async def _startup() -> None:
         c.execute("UPDATE chunks SET state='pending' WHERE state='running'")
         c.execute("UPDATE meetings SET enhance_state='idle' WHERE enhance_state='running'")
     start_bg(transcription_worker(_stop))
-    start_bg(_import_loop())
+    start_bg(_maintenance_loop())
 
 
-async def _import_loop() -> None:
+async def _maintenance_loop() -> None:
     await asyncio.to_thread(run_imports)
     await asyncio.to_thread(finish_stale_recordings)
     while not _stop.is_set():
@@ -1179,6 +1155,8 @@ async def meeting_audio(mid: str, request: Request):
 
 @app.post("/api/meetings/{mid}/enhance")
 async def enhance(mid: str, request: Request):
+    if not model_configured():
+        raise HTTPException(503, "Summaries are not configured")
     body = await request.json() if (await request.body()) else {}
     template = body.get("template") if body.get("template") in TEMPLATES else "general"
     with closing(db()) as c:
@@ -1191,7 +1169,7 @@ async def enhance(mid: str, request: Request):
 
 @app.post("/api/meetings/{mid}/ask")
 async def ask_meeting(mid: str, request: Request):
-    if not LLM_URL:
+    if not model_configured():
         raise HTTPException(503, "Notes provider is not configured")
     body = await request.json()
     q = str(body.get("question", "")).strip()[:2000]
@@ -1207,7 +1185,7 @@ async def ask_meeting(mid: str, request: Request):
 
 @app.post("/api/ask")
 async def ask_everything(request: Request):
-    if not LLM_URL:
+    if not model_configured():
         raise HTTPException(503, "Notes provider is not configured")
     body = await request.json()
     q = str(body.get("question", "")).strip()[:2000]
@@ -1253,17 +1231,14 @@ async def delete_meeting(mid: str):
 # ---------------------------------------------------------------- static
 
 from package_routes import install_routes
+from optional_routes import install_optional
 install_routes(app)
+install_optional(app)
 
 
 @app.get("/")
 async def index(request: Request):
-    raw = request.scope.get("raw_path", b"").decode()
-    # The old Meetings view is retired: Mizel.ai has one view, Mizel Live (/mizel-live/). Its hash routes
-    # (#/m/<id>) match, and the browser carries the hash across the redirect. This server stays the API.
-    if not os.environ.get("MEETINGS_EXTERNAL_VIEW"):
-        return JSONResponse({"app":"mizel", "api":"/api", "mcp":"/mcp", "view":"Use the installed Mizel Live view or native recorder."})
-    return RedirectResponse(os.environ["MEETINGS_EXTERNAL_VIEW"], status_code=302)
+    return {"app":"wizard-recorder", "api":"/api", "mcp":"/wizard-recorder/mcp"}
 
 
 @app.get("/{name}")

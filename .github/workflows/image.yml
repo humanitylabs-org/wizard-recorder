@@ -1,0 +1,97 @@
+name: Thales private image and clean proof
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed source commit
+        required: true
+        type: string
+      confirm_version:
+        description: Repeat the new write-once version (0.4.0)
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish-and-prove:
+    if: github.repository == 'humanitylabs-org/wizard-recorder' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feat/portable-recorder'
+    runs-on: [self-hosted, macOS, ARM64, wizard-recorder-qa]
+    timeout-minutes: 100
+    env:
+      DOCKER_CONTEXT: colima-wizard-agents
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify reviewed dispatch
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          CONFIRM_VERSION: ${{ inputs.confirm_version }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$CONFIRM_VERSION" = "0.4.0"
+      - name: Verify isolated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+          export UV_CACHE_DIR="$RUNNER_TEMP/uv-cache" UV_PYTHON_INSTALL_DIR="$RUNNER_TEMP/uv-python"
+          mkdir -p "$RUNNER_TEMP/evidence"
+          uv venv "$RUNNER_TEMP/recorder-venv" --python 3.12
+          uv pip install --python "$RUNNER_TEMP/recorder-venv/bin/python" -r app/requirements.txt pytest
+          "$RUNNER_TEMP/recorder-venv/bin/python" -m pytest tests -q 2>&1 | tee "$RUNNER_TEMP/evidence/pytest.log"
+          npm --prefix view ci --ignore-scripts
+          RECORDER_TEST_PYTHON="$RUNNER_TEMP/recorder-venv/bin/python" npm --prefix view test 2>&1 | tee "$RUNNER_TEMP/evidence/node-tests.log"
+          python3 qa/scan-source.py | tee "$RUNNER_TEMP/evidence/source-scan.log"
+          npm --prefix qa ci --ignore-scripts
+      - name: Multi-architecture build on Thales and publish private package
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          socket=$(docker context inspect colima-wizard-agents --format '{{.Endpoints.docker.Host}}')
+          unset DOCKER_CONTEXT
+          export DOCKER_HOST="$socket"
+          export DOCKER_CONFIG="$RUNNER_TEMP/registry-auth"
+          mkdir -p "$DOCKER_CONFIG"
+          builder="recorder-${GITHUB_RUN_ID}"
+          trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
+          if GH_TOKEN="$GHCR_TOKEN" gh api orgs/humanitylabs-org/packages/container/wizard-recorder > "$RUNNER_TEMP/evidence/package-before.json"; then
+            python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/package-before.json"))["visibility"]=="private", "Refusing to push to a non-private package"'
+          else
+            python3 -c 'import json,os; assert str(json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/package-before.json")).get("status"))=="404", "Cannot verify package privacy before push"'
+          fi
+          python3 qa/registry-auth.py
+          docker buildx create --name "$builder" --driver docker-container --use "$DOCKER_HOST"
+          docker buildx build --platform linux/arm64,linux/amd64 --provenance=false --push -f app/Dockerfile \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --metadata-file "$RUNNER_TEMP/evidence/build-metadata.json" \
+            -t ghcr.io/humanitylabs-org/wizard-recorder:0.4.0 \
+            -t ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" . 2>&1 | tee "$RUNNER_TEMP/evidence/image-build.log"
+          docker buildx imagetools inspect ghcr.io/humanitylabs-org/wizard-recorder:"$GITHUB_SHA" | tee "$RUNNER_TEMP/evidence/image-manifest.log"
+          GH_TOKEN="$GHCR_TOKEN" gh api orgs/humanitylabs-org/packages/container/wizard-recorder --jq '{name,visibility,repository:.repository.full_name}' | tee "$RUNNER_TEMP/evidence/package-privacy.json"
+          python3 -c 'import json,os; assert json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/package-privacy.json"))["visibility"]=="private"'
+          digest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/evidence/build-metadata.json"))["containerimage.digest"])')
+          image="ghcr.io/humanitylabs-org/wizard-recorder@$digest"
+          docker pull "$image"
+          # Bind mounts must sit under the Colima VM's shared mount, or the data never reaches the host.
+          qa_parent=/Volumes/ThalesMedia/agents/wizard-recorder-qa
+          root="$qa_parent/clean-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          keep="$RUNNER_TEMP/clean-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$qa_parent" "$keep"
+          trap 'cp -R "$root/evidence" "$keep/" 2>/dev/null || true' EXIT
+          python3 qa/clean-install.py --image "$image" --root "$root" 2>&1 | tee "$RUNNER_TEMP/evidence/e2e.log"
+      - name: Retain proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recorder-proof-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/evidence/
+            ${{ runner.temp }}/clean-*/evidence/
+          retention-days: 14
+          if-no-files-found: error

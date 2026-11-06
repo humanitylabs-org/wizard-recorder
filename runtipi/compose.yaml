@@ -1,0 +1,40 @@
+services:
+  wizard-recorder:
+    image: ghcr.io/humanitylabs-org/wizard-recorder:0.4.0
+    user: 1000:1000
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 768m
+    tmpfs: [/tmp]
+    environment:
+      MEETINGS_DATA: /data
+      TRANSCRIPTION_URL: ${TRANSCRIPTION_URL:-http://transcriber:8000/v1/audio/transcriptions}
+      TRANSCRIPTION_MODEL: ${TRANSCRIPTION_MODEL:-Systran/faster-whisper-small}
+      MEETINGS_ALLOWED_ORIGINS: ${MEETINGS_ALLOWED_ORIGINS:-}
+      MEETINGS_TIMEZONE: ${MEETINGS_TIMEZONE:-UTC}
+      WIZARD_ROUTER_URL: ${WIZARD_ROUTER_URL:-}
+      WIZARD_ROUTER_GRANT: ${WIZARD_ROUTER_GRANT:-}
+      WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
+      WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
+      RECORDER_ORB_EVENTS: ${RECORDER_ORB_EVENTS:-0}
+      MEETINGS_OWNER_NAME: ${MEETINGS_OWNER_NAME:-}
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      MEETINGS_LLM_URL: ${MEETINGS_LLM_URL:-}
+      MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
+      MEETINGS_LLM_MODEL: ${MEETINGS_LLM_MODEL:-glm-5-3}
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    x-runtipi:
+      is_main: true
+      internal_port: 8080
+x-runtipi:
+  schema_version: 2
+  overrides: []

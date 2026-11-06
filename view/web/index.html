@@ -1,16 +1,17 @@
 <!doctype html>
-<html lang="en" data-app="mizel">
+<html lang="en" data-app="wizard-recorder">
 <head>
-  <script src="/wizard-os-home/core/app-capture.js"></script>
-  <script src="/wizard-os-home/core/app-client.js"></script>
+  <script src="core/app-capture.js"></script>
+  <script src="core/app-client.js"></script>
+  <script src="capabilities.js"></script>
   <meta charset="utf-8">
-  <title>Mizel</title>
+  <title>Recorder</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0f1014">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Mizel">
+  <meta name="apple-mobile-web-app-title" content="Recorder">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="referrer" content="same-origin">
   <link rel="manifest" href="manifest.webmanifest">
@@ -56,10 +57,10 @@
       <header class="side-head">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><use href="#i-mark"/></svg></span>
-          <span class="brand-text"><b>Mizel.ai</b></span>
+          <span class="brand-text"><b>Recorder</b></span>
         </div>
       </header>
-      <!-- New recording: floating bottom-right on phones (thumb reach), as in native Mizel.ai. Keep it there. -->
+      <!-- New recording: floating bottom-right on phones (thumb reach), as in native Recorder. Keep it there. -->
       <button id="btn-new-mobile" class="rec-fab only-mobile" type="button" aria-label="New recording"><svg class="w-ic" aria-hidden="true"><use href="#i-mic"/></svg></button>
       <div class="side-actions">
         <button id="search-open" class="w-field search-trigger" type="button" aria-label="Search meetings and actions">
@@ -121,7 +122,7 @@
           <div id="live-connection" class="live-connection" hidden role="status"></div>
           <div id="doc-body" class="doc-body">
             <div id="conflict" class="conflict" hidden></div>
-            <textarea id="notepad" class="notepad" rows="1" placeholder="Write as little as you like. Mizel listens, and fills in the rest when you stop." aria-label="Your notes"></textarea>
+            <textarea id="notepad" class="notepad" rows="1" placeholder="Write as little as you like. Recorder listens, and fills in the rest when you stop." aria-label="Your notes"></textarea>
             <div id="notes-actions" class="notes-actions" hidden></div>
             <div id="notes-view" class="notes-view" hidden></div>
             <div id="enhanced" class="enhanced" hidden></div>
@@ -135,10 +136,10 @@
             </section>
             <section id="summary" class="summary inline-summary" hidden aria-label="Live summary" aria-live="polite"></section>
           </div>
-          <section id="arch-section" class="arch-section" hidden aria-label="Asked Archimedes"></section>
+          <section id="arch-section" class="arch-section" hidden aria-label="Asked the assistant"></section>
           <section id="asks" class="asks" aria-label="Questions about this meeting"></section>
         </article>
-        <section id="arch-view" class="doc arch-view" hidden aria-label="Archimedes answers"></section>
+        <section id="arch-view" class="doc arch-view" hidden aria-label="the assistant answers"></section>
       </div>
 
       <form id="ask-meeting" class="composer" hidden autocomplete="off">

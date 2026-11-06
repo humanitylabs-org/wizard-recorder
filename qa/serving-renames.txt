@@ -1,0 +1,4 @@
+label:APP capture or durable task save => Recording capture or durable task save | test=view/test-serving-source.mjs | token=Recording capture or durable task save
+label:APP recorder => Recorder | test=view/test-serving-source.mjs | token=Recorder
+label:APP recording => Recorder recording | test=view/test-serving-source.mjs | token=Recorder recording
+label:Keep this recording in APP only => Keep this recording in Recorder only | test=view/test-serving-source.mjs | token=Keep this recording in Recorder only

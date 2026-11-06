@@ -1,0 +1,10 @@
+*
+!app/
+!app/*.py
+!app/requirements.txt
+!view/
+!view/*.mjs
+!view/*.js
+!view/package*.json
+!view/web/
+!view/web/**

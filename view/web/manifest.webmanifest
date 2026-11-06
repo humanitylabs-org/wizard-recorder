@@ -1,8 +1,8 @@
 {
-  "id": "/mizel-live/",
-  "name": "Mizel Live",
-  "short_name": "Mizel",
-  "description": "Live meeting recorder: transcript, live summary, and “Archimedes, …” answers while you talk.",
+  "id": "/wizard-recorder/",
+  "name": "Recorder Live",
+  "short_name": "Recorder",
+  "description": "Live meeting recorder with transcript, live summary, explicit agent questions, and chosen-agent delivery.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

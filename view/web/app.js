@@ -1,5 +1,6 @@
+const CAP = window.RecorderCapabilities || {realtime:true,summaries:true,agent:true,orb:true};
 /*
- * Mizel — front end (no dependencies). Styled by wizard-style.css (shared) + styles.css (app layer).
+ * Recorder — front end (no dependencies). Styled by wizard-style.css (shared) + styles.css (app layer).
  *
  *  1. Utilities             7. Transcript (panel + inline, grouped paragraphs, citations)
  *  2. API client            8. Capture: WAV, upload queue, browser + native recorders
@@ -80,7 +81,7 @@ const fmtDateLong = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'lo
 const fmtDateShort = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 const relTime = (iso) => { const d = new Date(iso); return startOfDay(d) - startOfDay(new Date()) === 0 ? fmtTime(iso) : `${dayLabel(iso)} ${fmtTime(iso)}`; };
 const pluralize = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const SOURCE_LABEL = { mizel: 'Mizel recorder', anarlog: 'Anarlog', meetings: 'Recorded here' };
+const SOURCE_LABEL = { mizel: 'Recorder', anarlog: 'Anarlog', meetings: 'Recorded here' };
 const TEMPLATES = [['general', 'General'], ['one_on_one', '1:1'], ['sales', 'Sales']];
 const supportsPlaintextOnly = (() => { const d = document.createElement('div'); d.contentEditable = 'plaintext-only'; return d.contentEditable === 'plaintext-only'; })();
 const initials = (s) => { const t = String(s || '').split('@')[0].split(/[\s._-]+/).filter(Boolean); return ((t[0]?.[0] || '') + (t[1]?.[0] || '')).toUpperCase() || '?'; };
@@ -211,7 +212,7 @@ const draftKey = (id) => `meetings.draft.${id}`;
 
 function parseHash() {
   const ask = /[?&]ask=([A-Za-z0-9_-]+)/.exec(location.hash)?.[1] || null;
-  if (/^#\/archimedes/.test(location.hash)) return { view: 'archimedes', id: null, ask };
+  if (/^#\/(?:assistant|archimedes)/.test(location.hash)) return { view: 'assistant', id: null, ask };
   const m = /^#\/m\/([^/?#]+)/.exec(location.hash);
   return m ? { view: 'meeting', id: decodeURIComponent(m[1]), ask } : { view: 'home', id: null, ask };
 }
@@ -228,16 +229,16 @@ function goBack() { if (history.length > 1) history.back(); else navigate(null);
 function applyRoute(route) {
   const prev = state.route;
   state.route = route;
-  els.app.dataset.view = route.view === 'archimedes' ? 'meeting' : route.view;
+  els.app.dataset.view = route.view === 'assistant' ? 'meeting' : route.view;
   syncAppOrb();
   closeOverlay();
-  els.archView.hidden = route.view !== 'archimedes';
-  if (route.view === 'archimedes') {
+  els.archView.hidden = route.view !== 'assistant';
+  if (route.view === 'assistant') {
     els.home.hidden = true; els.doc.hidden = true; closeDrawer(); stopPolling(); closeMenu();
     if (state.current && !state.rec) { flushNotes(); state.current = null; }
-    replace(els.topStatus, h('span', { class: 'w-badge is-accent', text: 'Archimedes' })); clear(els.docActions);
+    replace(els.topStatus, h('span', { class: 'w-badge is-accent', text: mainAgentName() })); clear(els.docActions);
     renderAskBar(); renderPill(); loadAllAsks();
-    if (prev.view !== 'archimedes') els.docScroll.scrollTop = 0;
+    if (prev.view !== 'assistant') els.docScroll.scrollTop = 0;
   } else if (route.view === 'meeting') {
     els.home.hidden = true; els.doc.hidden = false;
     if (state.current?.id !== route.id) loadMeeting(route.id);
@@ -273,7 +274,7 @@ async function loadCalendar() {
 const refreshAll = () => { loadMeetings(); loadCalendar(); };
 // Today in the calendar timezone, plus a four-hour lookahead across midnight.
 const upcomingEvents = (now = Date.now()) => {
-  const day = (t) => new Date(t).toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  const day = (t) => new Date(t).toLocaleDateString('en-CA', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
   const today = day(now), overnightThrough = now + 4 * 3600000;
   return state.calendar.filter((ev) => {
     const start = new Date(ev.start).getTime(), end = new Date(ev.end).getTime();
@@ -316,7 +317,7 @@ function renderList() {
   if (els.archEntry) {
     const n = allAsks.list.filter((a) => a.status !== 'cancelled').length;
     $('.n', els.archEntry).textContent = allAsks.loaded ? (n ? String(n) : '') : '';
-    els.archEntry.setAttribute('aria-current', String(state.route.view === 'archimedes'));
+    els.archEntry.setAttribute('aria-current', String(state.route.view === 'assistant'));
   }
   const box = els.meetings;
   if (state.meetingsLoading && !state.meetings.length) {
@@ -403,6 +404,7 @@ function renderHome() {
 }
 const SUGGESTIONS = ['What did I commit to this week?', 'Summarize my last meeting', 'Which open questions keep coming up?'];
 function renderSuggestions() {
+  if(!CAP.summaries){els.askSuggest.hidden=true;return;}
   replace(els.askSuggest, ...SUGGESTIONS.map((s) => h('button', { class: 'w-chip', type: 'button', text: s, onclick: () => askAll(s) })));
 }
 
@@ -465,7 +467,7 @@ function setCurrent(m, { fresh = false } = {}) {
     state.notes.rev = m.notes_rev || 0;
     state.notes.editing = false;
     els.notepad.value = m.notes || '';
-    state.docMode = m.status === 'recording' ? 'transcript' : 'enhanced';
+    state.docMode = m.status === 'recording' || !CAP.summaries ? 'transcript' : 'enhanced';
     state.lastEnhancedAt = enhancedAt;
     state.pendingTemplate = m.enhanced?.template || null;
     const draft = isImported(m) ? null : localStorage.getItem(draftKey(m.id));
@@ -513,7 +515,7 @@ function renderDoc() {
     els.notepad.hidden = true; els.enhanced.hidden = true; els.transcriptInline.hidden = true; renderSaved(); renderAskBar(); renderPill();
     return;
   }
-  renderHeader(m); player.mount(m); renderStatus(m); renderToolbar(m); renderBody(m); renderAsks(m); renderArchimedesSection(); renderAskBar(); renderPill(); renderSaved();
+  renderHeader(m); player.mount(m); renderStatus(m); renderToolbar(m); renderBody(m); renderAsks(m); renderAssistantSection(); renderAskBar(); renderPill(); renderSaved();
   if (els.archSection.dataset.for !== m.id) { els.archSection.dataset.for = m.id; refreshMeetingAsks(m.id); }
   if (['transcript', 'live-summary'].includes(state.docMode)) renderDrawer();
 }
@@ -549,7 +551,7 @@ function toggleMenu(m) {
   if (closeMenu()) return;
   const fileName = `${(m.title || 'meeting').replace(/[\\/:*?"<>|]+/g, '-')}.md`;
   const menu = h('div', { class: 'w-menu', role: 'menu', onclick: (e) => e.stopPropagation() },
-    h('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); openManualAsk(m.id); } }, icon('spark'), 'Ask Archimedes…'),
+    h('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); openManualAsk(m.id); } }, icon('spark'), `Ask ${mainAgentName()}…`),
     h('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); copyMarkdown(m); } }, icon('copy'), 'Copy as Markdown'),
     h('a', { href: API.exportUrl(m.id), download: fileName, role: 'menuitem', onclick: () => setTimeout(closeMenu) }, icon('download'), 'Export .md'),
     m.source === 'meetings' && h('hr'),
@@ -624,7 +626,7 @@ async function saveTitle() {
 
 let stoppedHere = null; // { id, at }: a recording this device just stopped, while the server catches up
 const justStoppedHere = (m) => stoppedHere?.id === m.id && Date.now() - stoppedHere.at < 10 * 60e3;
-const canEnhance = (m) => !!(m.notes?.trim() || m.segments?.length) && m.status === 'ready';
+const canEnhance = (m) => CAP.summaries && !!(m.notes?.trim() || m.segments?.length) && m.status === 'ready';
 function renderStatus(m) {
   const kids = [];
   const r = state.rec?.meetingId === m.id ? state.rec : null;
@@ -653,7 +655,7 @@ function renderToolbar(m) {
   const tabs = recording ? [['notes', 'Notes'], ['transcript', 'Live transcript'], ['live-summary', 'Live summary']]
     : [['notes', 'My notes'], ['enhanced', 'Summary'], ['transcript', 'Transcript']];
   replace(els.docToolbar, h('div', { class: 'w-seg doc-tabs', role: 'tablist', 'aria-label': 'Recording content' },
-    ...tabs.map(([mode, label]) => h('button', { type: 'button', role: 'tab', dataset: { mode }, text: label,
+    ...tabs.filter(([mode])=>CAP.summaries||!['enhanced','live-summary'].includes(mode)).map(([mode, label]) => h('button', { type: 'button', role: 'tab', dataset: { mode }, text: label,
       'aria-selected': String(state.docMode === mode), 'aria-pressed': String(state.docMode === mode), onclick: () => setDocMode(mode) }))));
 }
 function setDocMode(mode) {
@@ -720,7 +722,7 @@ function renderEnhanced(m) {
   const nCites = (m.enhanced.evidence || []).length;
   const tpl = TEMPLATES.find(([k]) => k === m.enhanced.template)?.[1] || 'General';
   replace(box,
-    hasYours && h('div', { class: 'legend' }, h('span', { class: 'k-yours' }, h('i'), 'Your notes'), h('span', { class: 'k-ai' }, h('i'), 'Added by Mizel')),
+    hasYours && h('div', { class: 'legend' }, h('span', { class: 'k-yours' }, h('i'), 'Your notes'), h('span', { class: 'k-ai' }, h('i'), 'Added by Recorder')),
     h('div', { class: 'w-prose md marks', html: md(src, { marks: true, evidence: true, shift: 1 }) }),
     h('div', { class: 'enh-foot' }, icon('spark'), 'Summary', m.enhanced.created_at && `· ${relTime(m.enhanced.created_at)}`, nCites ? `· ${pluralize(nCites, 'source')} — hover a number to preview, click to jump` : null), discussionSection(m.id));
 }
@@ -857,6 +859,7 @@ const player = {
 const linkedDiscussions = new Map();
 let discussionLoading=false;
 async function loadDiscussions() {
+  if(!CAP.orb)return;
   const id=state.current?.id;if(!id||discussionLoading)return;discussionLoading=true;
   try{const r=await fetch(`orb-events?meetingId=${enc(id)}`,{cache:'no-store'});if(!r.ok)return;const j=await r.json();
     const old=JSON.stringify(linkedDiscussions.get(id)||[]);linkedDiscussions.set(id,j.events||[]);
@@ -869,18 +872,18 @@ async function loadDiscussions() {
 }
 setInterval(loadDiscussions,3000);
 function discussionCard(e) {
-  const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
+  const label=['sent','answered'].includes(e.status)?`Asked ${mainAgentName()}`:e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
   return h('section',{class:'qa orb-event',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)}},
     h('header',{},h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),' ',h('strong',{text:label})),
-    h('p',{text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Question pending transcription')}),
-    h('small',{text:'Assistant material · not meeting speech or an agreed decision'}),
+    h('p',{text:e.question||(['cancelled','local'].includes(e.status)?`Nothing sent to ${mainAgentName()}.`:'Question pending transcription')}),
+    h('small',{text:`${mainAgentName()} material · not meeting speech or an agreed decision`}),
     e.threadId&&h('p',{},h('a',{class:'w-btn w-btn-sm',href:threadHref(e.threadId),target:'_top',text:'Continue in Wizard'})),
     e.answer&&h('details',{},h('summary',{text:'Assistant answer'}),h('p',{text:e.answer})),
     e.error&&h('p',{text:e.error}));
 }
 function discussionSection(id) {
   const rows=(linkedDiscussions.get(id)||[]).filter(e=>!['cancelled','paused','local'].includes(e.status));
-  return rows.length?h('section',{class:'sum-topic linked-discussions'},h('h3',{text:'Archimedes discussions'}),...rows.map(discussionCard)):null;
+  return rows.length?h('section',{class:'sum-topic linked-discussions'},h('h3',{text:`${mainAgentName()} discussions`}),...rows.map(discussionCard)):null;
 }
 // Kept as compatibility hooks for citations and the keyboard shortcut; content is inline.
 function toggleDrawer() { setDocMode('transcript'); }
@@ -894,6 +897,7 @@ const summaryStore = {
   retry(id) { this.building.add(id); setTimeout(() => { this.building.delete(id); if (state.current?.id === id) void this.load(id); }, 4000); },
   set(id, sm) { if (sm) this.byMeeting.set(id, sm); if (state.current?.id === id) { if (state.docMode === 'live-summary') renderSummary(); if (state.docMode === 'transcript') renderOriginalSummary(); } },
   async load(id) {
+    if(!CAP.summaries)return;
     if (this.loading.has(id)) return; this.loading.add(id);
     try {
       const m = state.current?.id === id ? state.current : null;
@@ -1241,7 +1245,7 @@ async function verifyCaptureReadback(meetingId, take, finalSeq) {
 
 // ───────────────────────── 9. Recording controller + floating recorder ─────────────────────────
 function recElapsed() { return state.rec?.engine?.elapsedMs || 0; }
-// Mizel transcripts carry no speaker labels, so the Wizard bridge reads a spoken opener ("Call with Jan and
+// Recorder transcripts carry no speaker labels, so the Wizard bridge reads a spoken opener ("Call with Jan and
 // Miguel") as the participant list. A brand-new recording gets one quiet, self-dismissing nudge to say it.
 const PARTICIPANTS_HINT = 'In a meeting? Start by saying who\u2019s here, like \u201cCall with Jan and Miguel.\u201d';
 const PARTICIPANTS_HINT_MS = 5000;
@@ -1390,7 +1394,7 @@ async function reattachShared(failed = null) {
     failed?.engine?.detach?.();
     const cbs={onLevel:updateLevel,onQueue:renderPillQueue,onState:renderPill,onWarn:msg=>toast(msg,{error:true}),onLive:(samples,at)=>live.audio(samples,at),onNative:onNativeState};
     const engine=new SharedMeeting(id,cbs,{captureId:take.id});
-    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
+    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Recording capture or durable task save');startPillClock();
     if(current || take.meta?.captureRecovery?.resumable) {
       await engine.start({systemAudio:false});if(state.rec!==r)return;r.phase='recording';r.paused=!!engine.info.paused;
       if(engine.info.phase==='error'||engine.info.inputStopped){state.rec.phase='error';await stopRecording();return;}
@@ -1481,7 +1485,7 @@ function endRecSession() { state.rec?.engine?.detach?.(); clearTimeout(state.rec
 
 let pillClock = 0;
 let recordingUpdateHold = null;
-function startPillClock() { if (!recordingUpdateHold) recordingUpdateHold = WizardApp.update.hold('Mizel recording'); stopPillClock(); pillClock = setInterval(() => { tickPillClock(); renderRecBanner(); }, 500); }
+function startPillClock() { if (!recordingUpdateHold) recordingUpdateHold = WizardApp.update.hold('Recorder recording'); stopPillClock(); pillClock = setInterval(() => { tickPillClock(); renderRecBanner(); }, 500); }
 function stopPillClock() { clearInterval(pillClock); pillClock = 0; }
 function tickPillClock() { const c = $('.clock', els.pill); if (c && state.rec) c.textContent = fmtClock(recElapsed()); }
 const BAR_SHAPE = [0.5, 0.8, 1, 0.75, 0.45];
@@ -1545,11 +1549,12 @@ function renderPillQueue() {
 }
 
 
-// ───────────────────────── 9b. Live mode: live words + "Archimedes, …" ask cards ─────────────────────────
+// ───────────────────────── 9b. Live mode: live words + "Assistant, …" ask cards ─────────────────────────
 const live = {
   ws: null, meetingId: null, title: '', on: false, partial: '', settled: [], asks: new Map(),
   threadId: null, status: 'off', retry: 0, heard: null, reason: '',
   start(meetingId, title, { follow = false } = {}) {
+    if(!CAP.realtime)return;
     this.stop({ finish: false }); this.on = true; this.meetingId = meetingId; this.title = title || ''; this.follow = !!follow;
     this.partial = ''; this.partialAt = Math.round(recElapsed()); this.settled = []; this.heard = null; this.retry = 0;
     if (!this.asks.size || [...this.asks.values()][0]?.meetingId !== meetingId) this.asks = new Map();
@@ -1584,7 +1589,7 @@ const live = {
       if (!had && navigator.vibrate) navigator.vibrate(30);
       const i = allAsks.list.findIndex((x) => x.id === m.ask.id); if (i >= 0) allAsks.list[i] = m.ask; else allAsks.list.unshift(m.ask);
       if (overlay?.askId === m.ask.id) openAskSheetFor(m.ask.id, true);
-      if (state.current?.id === m.ask.meetingId) renderArchimedesSection();
+      if (state.current?.id === m.ask.meetingId) renderAssistantSection();
     }
     else if (m.type === 'heard') { this.heard = { text: m.text, at: Date.now() }; setTimeout(renderLive, 4200); }
     renderLive();
@@ -1627,12 +1632,12 @@ function askBtn(text, type, id, primary = false) { return h('button', { class: `
 async function dismissAsk(a, undo = true) {
   a.dismissed = true; live.asks.set(a.id, a); renderLive();
   try { await fetch(`asks/${enc(a.id)}/dismiss`, { method: 'POST' }); } catch { /* ignore */ }
-  if (undo) toast('Moved to Archimedes', { action: { label: 'Undo', fn: async () => { a.dismissed = false; live.asks.set(a.id, a); renderLive(); try { await fetch(`asks/${enc(a.id)}/restore`, { method: 'POST' }); } catch { /* ignore */ } } } });
+  if (undo) toast(`Moved to ${mainAgentName()}`, { action: { label: 'Undo', fn: async () => { a.dismissed = false; live.asks.set(a.id, a); renderLive(); try { await fetch(`asks/${enc(a.id)}/restore`, { method: 'POST' }); } catch { /* ignore */ } } } });
 }
 function renderLive() {
   const el = els.live; if (!el) return;
   // Cards float only while this meeting is recording (or an answer is still on its way);
-  // afterwards they live in the meeting's "Asked Archimedes" list and the Archimedes section.
+  // afterwards they live in the meeting's "Asked Assistant" list and the Assistant section.
   const here = state.current?.id === live.meetingId;
   const pending = (a) => ['listening', 'working'].includes(a.status);
   const cards = [...live.asks.values()].filter((a) => a.status !== 'cancelled' && !a.dismissed && here && (live.on || pending(a)))
@@ -1643,31 +1648,31 @@ function renderLive() {
   renderConnectionStatus();
   el.hidden = !show; if (!show) { clear(el); return; }
   replace(el,
-    ...cards.map((a) => h('article', { class: `live-card is-${a.status}`, dataset: { id: a.id }, role: 'button', tabindex: '0', 'aria-label': 'Open Archimedes answer', onclick: () => openAsk(a.id), onkeydown: (e) => { if (e.key === 'Enter') openAsk(a.id); } },
+    ...cards.map((a) => h('article', { class: `live-card is-${a.status}`, dataset: { id: a.id }, role: 'button', tabindex: '0', 'aria-label': `Open ${mainAgentName()} answer`, onclick: () => openAsk(a.id), onkeydown: (e) => { if (e.key === 'Enter') openAsk(a.id); } },
       h('header', {},
-        h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), a.agentLabel || 'Archimedes'),
+        h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), a.agentLabel || mainAgentName()),
         h('span', { class: 'st', text: ASK_ST[a.status] || a.status }),
-        h('button', { class: 'w-icon-btn x', type: 'button', 'aria-label': 'Dismiss', title: 'Dismiss (find it again under Archimedes)', onclick: (e) => { e.stopPropagation(); if (a.status === 'listening') live.control('cancel', a.id); else dismissAsk(a); } }, icon('close'))),
+        h('button', { class: 'w-icon-btn x', type: 'button', 'aria-label': 'Dismiss', title: `Dismiss (find it again under ${mainAgentName()})`, onclick: (e) => { e.stopPropagation(); if (a.status === 'listening') live.control('cancel', a.id); else dismissAsk(a); } }, icon('close'))),
       h('p', { class: 'q', text: `“${a.text}”` }),
       a.status === 'listening' ? h('div', { class: 'la-listen' },
-          h('span', { class: 'hint', text: 'Automatic voice requests are disabled. Use Ask Archimedes.' }),
+          h('span', { class: 'hint', text: `Automatic voice requests are disabled. Use Ask ${mainAgentName()}.` }),
           h('span', { class: 'acts' }, askBtn('Cancel', 'cancel', a.id), askBtn('Send now', 'send-now', a.id, true)))
         : a.status === 'working' ? h('div', { class: 'dots', 'aria-label': 'Working' }, h('i'), h('i'), h('i'))
         : a.status === 'answered' ? h('div', { class: 'a md clamp', html: md(a.answer || '') })
         : h('div', { class: 'la-fail' }, h('p', { class: 'err', text: a.error || 'Something went wrong.' }), askBtn('Retry', 'retry', a.id, true)),
       a.status === 'answered' ? h('span', { class: 'more', text: 'Tap to read in full' }) : null)),
-    heard ? h('div', { class: 'lw-heard', text: 'Heard “Archimedes” — no request, carrying on.' }) : null,
+    heard ? h('div', { class: 'lw-heard', text: `Heard “${mainAgentName()}” — no request, carrying on.` }) : null,
     down ? h('div', { class: 'lw-heard warn', text: live.reason || 'Live words unavailable. Recording continues.' }) : null);
   for (const c of el.querySelectorAll('.a.clamp')) c.classList.toggle('is-long', c.scrollHeight > c.clientHeight + 4);
 }
 
-// ── Archimedes: every live answer, findable again ──
+// ── Assistant: every live answer, findable again ──
 const allAsks = { list: [], loaded: false, loading: false };
 async function loadAllAsks() {
-  allAsks.loading = true; renderArchimedesView();
+  allAsks.loading = true; renderAssistantView();
   try { const r = await fetch('asks?limit=300').then((x) => x.json()); allAsks.list = r.asks || []; allAsks.loaded = true; }
-  catch (e) { toast(`Couldn't load Archimedes answers: ${errMsg(e)}`, { error: true }); }
-  allAsks.loading = false; renderArchimedesView(); renderList();
+  catch (e) { toast(`Couldn't load Assistant answers: ${errMsg(e)}`, { error: true }); }
+  allAsks.loading = false; renderAssistantView(); renderList();
 }
 function askRow(a, { showMeeting = false } = {}) {
   const mt = state.meetings.find((x) => x.id === a.meetingId);
@@ -1679,32 +1684,32 @@ function askRow(a, { showMeeting = false } = {}) {
       h('span', { class: 'when', text: [showMeeting ? (mt?.title || a.title || 'Recording') : null, `${dayLabel(a.createdAt)} · ${fmtTime(a.createdAt)}`].filter(Boolean).join(' · ') })));
 }
 function stripMd(t) { return String(t).replace(/[*_`#>]+/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim(); }
-function renderArchimedesView() {
-  const box = els.archView; if (!box || state.route.view !== 'archimedes') return;
+function renderAssistantView() {
+  const box = els.archView; if (!box || state.route.view !== 'assistant') return;
   const list = allAsks.list.filter((a) => a.status !== 'cancelled');
   const groups = [];
   for (const a of list) { const k = dayLabel(a.createdAt); const g = groups[groups.length - 1]; if (g && g.k === k) g.items.push(a); else groups.push({ k, items: [a] }); }
   replace(box,
     h('p', { class: 'eyebrow', text: 'Live mode' }),
-    h('h1', { class: 'title', text: 'Archimedes' }),
-    h('p', { class: 'arch-sub', text: 'Messages you explicitly sent to Archimedes, newest first. Previous answers remain here too.' }),
+    h('h1', { class: 'title', text: mainAgentName() }),
+    h('p', { class: 'arch-sub', text: `Messages you explicitly sent to ${mainAgentName()}, newest first. Previous answers remain here too.` }),
     allAsks.loading && !list.length ? h('div', { class: 'w-empty' }, h('span', { class: 'w-spinner' }), ' Loading…')
-      : !list.length ? h('div', { class: 'w-empty', text: 'Nothing yet. Open a recording and tap Ask Archimedes.' })
+      : !list.length ? h('div', { class: 'w-empty', text: `Nothing yet. Open a recording and tap Ask ${mainAgentName()}.` })
       : h('div', { class: 'arch-list' }, ...groups.flatMap((g) => [h('h2', { class: 'w-label', text: g.k }), ...g.items.map((a) => askRow(a, { showMeeting: true }))])));
 }
-function renderArchimedesSection() {
+function renderAssistantSection() {
   const m = state.current; const box = els.archSection; if (!box) return;
   if (!m || isImported(m)) { clear(box); box.hidden = true; return; }
   const mine = allAsks.list.filter((a) => a.meetingId === m.id && a.status !== 'cancelled').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   box.hidden = !mine.length;
-  replace(box, mine.length ? h('div', { class: 'section-head', text: `Asked Archimedes · ${mine.length}` }) : null, ...mine.map((a) => askRow(a)));
+  replace(box, mine.length ? h('div', { class: 'section-head', text: `Asked ${mainAgentName()} · ${mine.length}` }) : null, ...mine.map((a) => askRow(a)));
 }
 async function refreshMeetingAsks(id) {
   try { const r = await fetch(`asks?meetingId=${enc(id)}`).then((x) => x.json());
     const ids = new Set((r.asks || []).map((a) => a.id));
     allAsks.list = [...(r.asks || []), ...allAsks.list.filter((a) => !ids.has(a.id))].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch { /* ignore */ }
-  if (state.current?.id === id) renderArchimedesSection();
+  if (state.current?.id === id) renderAssistantSection();
 }
 function findAsk(id) { return live.asks.get(id) || allAsks.list.find((a) => a.id === id) || null; }
 async function openAskSheetFor(id, refresh = false) {
@@ -1713,10 +1718,10 @@ async function openAskSheetFor(id, refresh = false) {
   if (!a) { toast('That answer is no longer here.'); if (state.route.ask) history.back(); return; }
   if (refresh && overlay?.askId !== id) return;
   const mt = state.meetings.find((x) => x.id === a.meetingId) || (state.current?.id === a.meetingId ? state.current : null);
-  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': `${a.agentLabel || 'Archimedes'} answer` },
+  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': `${a.agentLabel || mainAgentName()} answer` },
     h('div', { class: 'grabber', 'aria-hidden': 'true' }),
     h('header', {},
-      h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), 'Archimedes'),
+      h('span', { class: 'who' }, h('span', { class: 'orb', 'aria-hidden': 'true' }), mainAgentName()),
       h('span', { class: 'st', text: ASK_ST[a.status] || a.status }),
       h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: closeAskSheet }, icon('close'))),
     h('p', { class: 'when', text: [mt?.title || a.title || 'Recording', `${dayLabel(a.createdAt)} · ${fmtTime(a.createdAt)}`].join(' · ') }),
@@ -1737,20 +1742,27 @@ async function openAskSheetFor(id, refresh = false) {
 // Explicit public-agent message: never prefill with recording content.
 // ───────── Where the finished transcript goes ─────────
 // Every recording goes to the private agent unless this one recording is pointed somewhere else.
-const DEFAULT_AGENT = 'private';
-const AGENT_NAMES = { private: 'Private agent', hermes: 'Archimedes' };
-const AGENT_NOTES = { private: 'Only you can read it', hermes: 'Your main agent' };
-let agentList = { at: 0, list: null };
+let DEFAULT_AGENT = 'none';
+const AGENT_NAMES = {};
+const AGENT_NOTES = {};
+let agentList = { at:0,list:null,deviceOnly:true };
+function mainAgentName(){return agentList.list?.find(a=>a.is_default)?.label || agentList.list?.find(a=>a.privacy!=='private')?.label || 'Assistant';}
 async function wizardAgents() {
   if (agentList.list && Date.now() - agentList.at < 60000) return agentList.list;
-  let raw = [];
-  try { const r = await fetch('/wizard/v1/agents', { credentials: 'same-origin', cache: 'no-store' }); if (r.ok) raw = (await r.json()).agents || []; } catch { /* fall back below */ }
-  if (!raw.length) { try { raw = (await api('agents')).agents || []; } catch { raw = []; } }
+  let raw = [], registryKnown=false;
+  try {const installed=window.WizardApp?.agents?.list?.();if(Array.isArray(installed)){raw=installed;registryKnown=true;}} catch {}
+  if(!raw.length)try { const r = await fetch('/wizard/v1/agents', { credentials: 'same-origin', cache: 'no-store' }); if (r.ok) {const data=await r.json();if(Array.isArray(data.agents)){raw=data.agents;registryKnown=true;}} } catch { /* fall back below */ }
+  let deviceOnly=true;
+  try {const backend=await api('agents');deviceOnly=backend.deviceOnly!==false;if(!raw.length && Array.isArray(backend.agents)){raw=backend.agents;registryKnown=true;}}catch {}
   const list = raw.filter((a) => a && /^[a-z][a-z0-9-]{0,30}$/.test(a.id) && a.status !== 'stopped' && a.status !== 'removed' && a.role !== 'recovery')
-    .map((a) => ({ id: a.id, label: AGENT_NAMES[a.id] || a.label || a.id, privacy: a.privacy === 'private' ? 'private' : 'standard' }));
-  const rank = (a) => (a.id === DEFAULT_AGENT ? 0 : a.id === 'hermes' ? 1 : 2);
+    .map((a) => ({ id: a.id, label: a.label || a.name || a.id, privacy: a.privacy === 'private' ? 'private' : 'standard', is_default:a.is_default===true }));
+  DEFAULT_AGENT=list.find(a=>a.privacy==='private')?.id || 'none';
+  if(registryKnown)await api('agent-default',{method:'POST',json:{agent:DEFAULT_AGENT}}).catch(()=>{});
+  const rank = (a) => (a.id === DEFAULT_AGENT ? 0 : 1);
   list.sort((x, y) => rank(x) - rank(y) || x.label.localeCompare(y.label));
-  agentList = { at: Date.now(), list };
+  agentList = { at: Date.now(), list, deviceOnly };
+  els.archSection?.setAttribute('aria-label',`Asked ${mainAgentName()}`);
+  els.archView?.setAttribute('aria-label',`${mainAgentName()} answers`);
   return list;
 }
 const agentName = (id, list = agentList.list || []) => (id === 'none' ? 'Nobody' : list.find((a) => a.id === id)?.label || AGENT_NAMES[id] || id);
@@ -1773,9 +1785,10 @@ async function renderRoute(m) {
   const el = els.docRoute; if (!el) return;
   if (!m || isImported(m)) { el.hidden = true; return; }
   let r, list;
-  try { [r, list] = await Promise.all([loadRoute(m.id, 8000), wizardAgents()]); } catch { el.hidden = true; return; }
+  try { list=await wizardAgents(); r=await loadRoute(m.id,8000); } catch { el.hidden = true; return; }
   if (state.current?.id !== m.id) return;
-  const name = agentName(r.route, list);
+  if(!list.length && r.route==='none'){el.hidden=true;return;}
+  const name = agentName(r.route,list);
   const glyphFor = (id) => (id === 'none' ? 'off' : id === DEFAULT_AGENT ? 'lock' : 'agent');
   let row;
   if (r.sent) {
@@ -1786,7 +1799,7 @@ async function renderRoute(m) {
     row = routeRow({ glyph: glyphFor(r.route), tone: 'is-warn', title: ['Couldn’t reach ', h('b', { text: name })], sub: 'Tap to try again', onclick: () => openRouteSheet(m) });
   } else {
     const finished = m.status === 'ready';
-    const sub = r.route === 'none' ? 'This recording stays in Mizel'
+    const sub = r.route === 'none' ? 'This recording stays in Recorder'
       : !r.eligible ? 'Recorded before auto-send · Tap to send'
       : finished ? (r.due ? 'Sending now…' : 'Sends when the summary is ready')
       : r.isDefault ? 'Default · sends when you stop' : 'Just this recording';
@@ -1797,10 +1810,10 @@ async function renderRoute(m) {
 
 async function openRouteSheet(m) {
   let r, list;
-  try { [r, list] = await Promise.all([loadRoute(m.id), wizardAgents()]); } catch (e) { toast(errMsg(e), { error: true }); return; }
+  try { list=await wizardAgents(); r=await loadRoute(m.id); } catch (e) { toast(errMsg(e), { error: true }); return; }
   let choice = r.route;
   const error = h('p', { class: 'rs-err', role: 'status' });
-  const opts = [...list, { id: 'none', label: 'Don’t send', note: 'Keep this recording in Mizel only' }];
+  const opts = [...list, { id: 'none', label: 'Don’t send', note: 'Keep this recording in Recorder only' }];
   const finished = m.status === 'ready';
   const canSendNow = () => finished && choice !== 'none' && (!r.sent || r.sent.agent !== choice);
   const body = h('div', { class: 'rs-list', role: 'radiogroup', 'aria-label': 'Send this recording to' });
@@ -1808,7 +1821,7 @@ async function openRouteSheet(m) {
   const foot = h('div', { class: 'rs-foot' });
   const drawFoot = () => {
     sendBtn.textContent = `Send to ${agentName(choice, list)} now`;
-    replace(foot, h('p', { class: 'rs-note' }, choice === DEFAULT_AGENT || choice === r.default ? 'New recordings always go to ' : 'Only this recording changes. New recordings still go to ', h('b', { text: 'Private agent' }), '.'),
+    replace(foot, h('p', { class: 'rs-note' }, choice === DEFAULT_AGENT || choice === r.default ? 'New recordings always go to ' : 'Only this recording changes. New recordings still go to ', h('b', { text: agentName(r.default || DEFAULT_AGENT,list) }), '.'),
       canSendNow() ? sendBtn : null);
   };
   const pick = async (id) => {
@@ -1820,7 +1833,7 @@ async function openRouteSheet(m) {
   const draw = () => {
     replace(body, ...opts.map((a) => {
       const on = a.id === choice;
-      const note = a.note || (a.id === DEFAULT_AGENT ? AGENT_NOTES[a.id] : AGENT_NOTES[a.id] || (a.privacy === 'private' ? 'Private' : 'Standard agent'));
+      const note = a.note || (a.id === DEFAULT_AGENT ? (AGENT_NOTES[a.id] || (a.privacy==='private'?'Only you can read it':'Standard agent')) : AGENT_NOTES[a.id] || (a.privacy === 'private' ? 'Private' : 'Standard agent'));
       return h('button', { type: 'button', role: 'radio', class: 'rs-opt', 'aria-checked': String(on), dataset: { agent: a.id }, onclick: () => pick(a.id) },
         h('span', { class: `rs-ic${a.id === DEFAULT_AGENT ? ' is-private' : ''}` }, icon(a.id === 'none' ? 'off' : a.id === DEFAULT_AGENT ? 'lock' : 'agent')),
         h('span', { class: 'rs-text' }, h('span', { class: 'rs-name' }, a.label, a.id === DEFAULT_AGENT ? h('span', { class: 'rs-tag', text: 'Default' }) : null), h('span', { class: 'rs-sub', text: note })),
@@ -1844,32 +1857,36 @@ async function openRouteSheet(m) {
     body, error, foot));
 }
 
-// Sending. Standard agents are sent by the Mizel server; the private agent only accepts the owner's own
+// Sending. Standard agents are sent by the Recorder server; the private agent only accepts the owner's own
 // device, so this client sends it through Wizard (same path as Chats).
-async function wizardCall(path, agent, json, headers = {}) {
-  const r = await fetch(`/wizard/hermes${path}?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers }, body: JSON.stringify({ ...json, agent }) });
+async function wizardCall(path, agent, json, headers = {}, method='POST') {
+  const r = await fetch(`/wizard/hermes${path}?agent=${encodeURIComponent(agent)}`, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers }, body:method==='GET'?undefined:JSON.stringify({ ...json, agent }) });
   const text = await r.text(); let data = null; try { data = JSON.parse(text); } catch { /* not JSON */ }
   if (!r.ok) throw Object.assign(new Error(data?.error?.message || data?.error || `Wizard ${r.status}`), { status: r.status, body: text.slice(0, 200) });
   return data || {};
 }
+async function startDeviceRun(agent,title,text,key){
+  const id=`wizard_${Date.now()}_${Array.from(crypto.getRandomValues(new Uint8Array(6)),b=>b.toString(16).padStart(2,'0')).join('')}`;
+  const tag=()=>Array.from(crypto.getRandomValues(new Uint8Array(2)),b=>b.toString(16).padStart(2,'0')).join('');
+  for(const [i,name] of [title,`${title} · ${tag()}`,`${title} · ${tag()}${tag()}`].entries()){
+    try{await wizardCall('/api/sessions',agent,{id,source:'wizard-mobile',title:name.slice(0,90)});break;}
+    catch(e){if(!/invalid_title|already in use/i.test(`${e.message} ${e.body}`)||i===2)throw e;}
+  }
+  const run=await wizardCall('/v1/runs',agent,{session_id:id,input:text},{'Idempotency-Key':key});
+  return {threadId:id,runId:run.run_id||run.id||'',run};
+}
 async function deviceDeliver(meetingId, agent, { manual = false, label = '' } = {}) {
   const c = await api('deliveries/claim', { method: 'POST', json: { meetingId, agent, manual, agentLabel: label || agentName(agent) } });
   try {
-    const id = `wizard_${Date.now()}_${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('')}`;
-    const tag = () => Array.from(crypto.getRandomValues(new Uint8Array(2)), (b) => b.toString(16).padStart(2, '0')).join('');
-    for (const [i, title] of [c.title, `${c.title} · ${tag()}`, `${c.title} · ${tag()}${tag()}`].entries()) {
-      try { await wizardCall('/api/sessions', c.agent, { id, source: 'wizard-mobile', title: title.slice(0, 90) }); break; }
-      catch (e) { if (!/invalid_title|already in use/i.test(`${e.message} ${e.body}`) || i === 2) throw e; }
-    }
-    const run = await wizardCall('/v1/runs', c.agent, { session_id: id, input: c.text }, { 'Idempotency-Key': c.sendId });
-    return await api('deliveries/result', { method: 'POST', json: { sendId: c.sendId, threadId: id, runId: run.run_id || run.id || '' } });
+    const result=await startDeviceRun(c.agent,c.title,c.text,c.sendId);
+    return await api('deliveries/result', { method: 'POST', json: { sendId:c.sendId,threadId:result.threadId,runId:result.runId } });
   } catch (e) {
     await api('deliveries/result', { method: 'POST', json: { sendId: c.sendId, error: errMsg(e) } }).catch(() => {});
     throw e;
   }
 }
 async function deliver(meetingId, agent, { manual = false, label = '', viaDevice = false } = {}) {
-  if (viaDevice) return deviceDeliver(meetingId, agent, { manual, label });
+  if (viaDevice || agentList.deviceOnly) return deviceDeliver(meetingId, agent, { manual, label });
   return api('send', { method: 'POST', json: { meetingId, agent } });
 }
 let pumping = false;
@@ -1877,10 +1894,11 @@ async function pumpDeliveries() {
   if (pumping || document.visibilityState !== 'visible') return;
   pumping = true;
   try {
+    await refreshDeviceAsks();
     const { due = [] } = await api('deliveries/due');
     for (const d of due) {
       try { await deviceDeliver(d.meetingId, d.agent); routeCache.delete(d.meetingId); }
-      catch (e) { if (e?.status !== 409) console.warn('Mizel delivery failed', d.meetingId, errMsg(e)); }
+      catch (e) { if (e?.status !== 409) console.warn('Recorder delivery failed', d.meetingId, errMsg(e)); }
       if (state.current?.id === d.meetingId) void renderRoute(state.current);
     }
   } catch { /* offline: next tick */ }
@@ -1889,23 +1907,44 @@ async function pumpDeliveries() {
 void pumpDeliveries();
 setInterval(() => { void pumpDeliveries(); if (state.current && !els.docRoute.hidden) void renderRoute(state.current); }, 15000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void pumpDeliveries(); });
-function openManualAsk(meetingId) {
+async function deviceManualAsk(meetingId,text,agent){
+  const r=await api('manual-ask',{method:'POST',json:{meetingId,text,agent:agent.id,agentLabel:agent.label,device:true}});
+  try{
+    // Exactly the typed text, never the title, ambient transcript or recording.
+    const result=await startDeviceRun(agent.id,`Recorder · Ask → ${agent.label}`,text,r.ask.id);
+    return api('manual-ask/result',{method:'POST',json:{askId:r.ask.id,threadId:result.threadId,runId:result.runId,...(result.run.status==='completed'?{status:'answered',answer:result.run.output||''}:{})}});
+  }catch(e){await api('manual-ask/result',{method:'POST',json:{askId:r.ask.id,status:'failed',error:errMsg(e)}}).catch(()=>{});throw e;}
+}
+async function refreshDeviceAsks(){
+  for(const a of allAsks.list.filter(x=>x.via==='device'&&x.runId&&x.status==='working')){
+    try{
+      const run=await wizardCall('/v1/runs/'+enc(a.runId),a.agent,undefined,{},'GET');
+      if(!['completed','failed','cancelled','interrupted'].includes(run.status))continue;
+      const r=await api('manual-ask/result',{method:'POST',json:{askId:a.id,status:run.status==='completed'?'answered':'failed',answer:String(run.output||''),error:'Run ended '+run.status}});
+      Object.assign(a,r.ask);live.asks.set(a.id,r.ask);renderLive();renderAssistantSection();renderAssistantView();
+    }catch{/* The owner device will read the same admitted run again after reconnect/reload. */}
+  }
+}
+async function openManualAsk(meetingId) {
+  await wizardAgents();
   let sending = false;
-  const input = h('textarea', { class: 'w-input', rows: '4', maxlength: '6000', placeholder: 'Your message to Archimedes…', 'aria-label': 'Message to Archimedes', style: 'width:100%;resize:vertical;margin:12px 0' });
+  const input = h('textarea', { class: 'w-input', rows: '4', maxlength: '6000', placeholder: `Your message to ${mainAgentName()}…`, 'aria-label': `Message to ${mainAgentName()}`, style: 'width:100%;resize:vertical;margin:12px 0' });
   const error = h('p', { class: 'err', role: 'status' });
   const send = h('button', { class: 'w-btn w-btn-primary', type: 'button', text: 'Send to Wizard', onclick: async () => {
     const text = input.value.trim(); if (!text || sending) return;
     sending = true; send.disabled = true; error.textContent = '';
     try {
-      const r = await api('manual-ask', { method: 'POST', json: { meetingId, text } });
+      const agent=agentList.list?.find(a=>a.is_default)||agentList.list?.find(a=>a.privacy!=='private')||agentList.list?.[0];
+      if(!agent)throw Error('No installed Wizard agent is available');
+      const r=(agentList.deviceOnly||agent.privacy==='private')?await deviceManualAsk(meetingId,text,agent):await api('manual-ask', { method: 'POST', json: { meetingId, text, agent:agent.id } });
       live.asks.set(r.ask.id, r.ask);
       allAsks.list.unshift(r.ask);
-      renderLive(); renderArchimedesSection(); openAsk(r.ask.id);
+      renderLive(); renderAssistantSection(); openAsk(r.ask.id);
     } catch (e) { error.textContent = errMsg(e); sending = false; send.disabled = false; }
   } });
-  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': 'Ask Archimedes' },
+  const el = openOverlay(() => h('div', { class: 'sheet ask-sheet', role: 'dialog', 'aria-label': `Ask ${mainAgentName()}` },
     h('div', { class: 'grabber', 'aria-hidden': 'true' }),
-    h('header', {}, h('h2', { text: 'Ask Archimedes' }), h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
+    h('header', {}, h('h2', { text: `Ask ${mainAgentName()}` }), h('button', { class: 'w-icon-btn', type: 'button', 'aria-label': 'Close', onclick: () => closeOverlay() }, icon('close'))),
     h('p', { text: 'Only the message you send goes to your Wizard model. Your recording and transcript stay private.' }),
     input, error,
     h('div', { class: 'acts' }, h('button', { class: 'w-btn', type: 'button', text: 'Cancel', onclick: () => closeOverlay() }), send)));
@@ -1916,7 +1955,7 @@ function openManualAsk(meetingId) {
 // ───────────────────────── 10. Ask ─────────────────────────
 function renderAskBar() {
   const m = state.current;
-  els.askMeeting.hidden = !m || state.route.view !== 'meeting' || isLiveHere(m);
+  els.askMeeting.hidden = !CAP.summaries || !m || state.route.view !== 'meeting' || isLiveHere(m);
 }
 function renderAsks(m) {
   const asks = [...(m.asks || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
@@ -1952,7 +1991,7 @@ function renderAskAll() {
       : item.status === 'error' ? h('div', { class: 'a error' }, `${item.error} `, h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'Try again', onclick: () => askAll(item.question) }))
       : h('div', { class: 'a' }, h('div', { class: 'w-prose md answer', html: md(item.answer || '') }),
         item.meetings?.length ? h('div', { class: 'cites' }, ...item.meetings.map((mm) => h('a', { class: 'w-chip', href: `#/m/${enc(mm.id)}`, title: mm.title }, icon('arrow'), `${mm.title || 'Untitled'} · ${dayLabel(mm.started_at)}`))) : null))));
-  els.askSuggest.hidden = t.length > 0;
+  els.askSuggest.hidden = !CAP.summaries || t.length > 0;
   els.askAllThread.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 async function askAll(question) {
@@ -2080,7 +2119,7 @@ function notifyNative() {
   window.dispatchEvent(new CustomEvent('mizel:state', { detail }));
   try { window.webkit?.messageHandlers?.wizardNative?.postMessage({ type: 'mizel.state', ...detail }); } catch { /* not in a shell */ }
 }
-window.mizel = Object.freeze({
+window.recorder = window.mizel = Object.freeze({
   version: 1,
   open: (id) => navigate(id || null),
   newMeeting: () => newMeeting(),
@@ -2098,8 +2137,8 @@ function appBack() {
   if (state.route.view !== 'home') { goBack(); return true; }
   return false;
 }
-WizardApp.ready({ name: 'Mizel', version: '1' });
-// Wizard's agent orb becomes Mizel's New recording button on the list (two-orb layout); our own button then hides.
+WizardApp.ready({ name: 'Recorder', version: '1' });
+// Wizard's agent orb becomes Recorder's New recording button on the list (two-orb layout); our own button then hides.
 var orbClaimed = null;
 function syncAppOrb() {
   if (!WizardApp.orb) return;
@@ -2117,11 +2156,18 @@ window.wizardAppBack = () => { appBack(); return true; };
 let notesUpdateHold = null;
 function syncNotesUpdateHold() {
   const busy = state.notes.dirty || state.notes.saving || !!state.notes.conflict;
-  if (busy && !notesUpdateHold) notesUpdateHold = WizardApp.update.hold('Mizel unsaved notes');
+  if (busy && !notesUpdateHold) notesUpdateHold = WizardApp.update.hold('Recorder unsaved notes');
   if (!busy && notesUpdateHold) { notesUpdateHold.release(); notesUpdateHold = null; }
 }
 
 // ───────────────────────── 12. Boot ─────────────────────────
+async function uploadAudio(file) {
+  if(!file)return;
+  toast('Uploading audio…');
+  try {const r=await fetch(`api/uploads?title=${enc(file.name)}`,{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream'},body:file});
+    if(!r.ok)throw new Error(await r.text());const m=await r.json();await loadMeetings();navigate(m.id);}
+  catch(e){toast(`Upload failed: ${errMsg(e)}`,{error:true});}
+}
 function bind() {
   Object.assign(els, {
     app: $('#app'), home: $('#home-panel'), doc: $('#doc'), docPane: $('#doc-pane'), docScroll: $('#doc-scroll'),
@@ -2139,11 +2185,13 @@ function bind() {
   if (!IS_MAC) document.querySelectorAll('[data-mod]').forEach((k) => { k.textContent = 'Ctrl K'; });
 
   els.btnNew.addEventListener('click', newMeeting);
+  const upload=h('input',{type:'file',accept:'audio/*',hidden:true,onchange:e=>uploadAudio(e.target.files[0])});
+  document.querySelector('.side-actions').append(h('button',{type:'button',class:'w-btn',text:'Upload audio',onclick:()=>upload.click()}),upload);
   els.btnNewMobile.addEventListener('click', newMeeting);
   $('#search-open').addEventListener('click', () => openPalette());
   $('#btn-keys').addEventListener('click', openShortcuts);
   $('#btn-back').addEventListener('click', goBack);
-  els.archEntry?.addEventListener('click', () => { location.hash = '#/archimedes'; });
+  els.archEntry?.addEventListener('click', () => { location.hash = '#/assistant'; });
 
   els.title.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); els.title.blur(); }
@@ -2193,19 +2241,20 @@ function bind() {
 
 function boot() {
   bind();
+  els.askAll.hidden=!CAP.summaries;
   // Guarantee a Home entry beneath any deep link so Android Back steps document → list, never out of the app.
   const route = parseHash();
   const initialHash = location.hash || '#/';
   history.replaceState({ mizelRoot: true }, '', '#/');
-  if (route.view === 'meeting' || route.view === 'archimedes') history.pushState(null, '', initialHash);
+  if (route.view === 'meeting' || route.view === 'assistant') history.pushState(null, '', initialHash);
   applyRoute(route);
   refreshAll();
-  if (route.view !== 'archimedes') loadAllAsks();
+  if (route.view !== 'assistant') loadAllAsks();
   reattachShared();
 }
 boot();
 
-// Self-update: when a newer Mizel ships, reload on return to the app, never mid-recording or with a sheet open.
+// Self-update: when a newer Recorder ships, reload on return to the app, never mid-recording or with a sheet open.
 let loadedBuild = null;
 async function checkForUpdate() {
   try {

@@ -1,7 +1,7 @@
 """Recap delivery to the agent this app routes through (wizard-os spec/AGENTS.md section 7, "App → agent binding").
 
 The app never names an agent. The Wizard installer gives it one endpoint and one app-scoped token:
-    WIZARD_DELIVERY_URL    e.g. http://<agent service>/wizard/v1/apps/meeting-recorder/deliveries
+    WIZARD_DELIVERY_URL    e.g. http://<agent service>/wizard/v1/apps/wizard-recorder/deliveries
     WIZARD_DELIVERY_TOKEN  (or WIZARD_DELIVERY_TOKEN_FILE)
 and the owner picks the agent in Wizard ("Routes through"). Unset = no delivery (standalone use).
 

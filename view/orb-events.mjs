@@ -79,5 +79,5 @@ export function discussionMarkdown(rows) {
   const linked=rows.filter(r=>!['cancelled','local','paused'].includes(r.status));
   if(!linked.length)return '';
   const plain=s=>String(s||'').replace(/[\\`*_{}\[\]<>#]/g,'\\$&');
-  return '\n\n## Archimedes discussions\n\nAssistant material — not meeting speech or agreed decisions.\n'+linked.map(r=>`\n### ${Math.floor(r.atMediaMs/60000)}:${String(Math.floor(r.atMediaMs/1000)%60).padStart(2,'0')} · ${r.status}\n\n${plain(r.question)||'Question pending transcription'}\n\n${r.threadId?`[Continue in Wizard](/wizard/?session=${encodeURIComponent(r.threadId)})`:'Delivery pending'}${r.answer?'\n\nAssistant answer: '+plain(r.answer):''}\n`).join('');
+  return '\n\n## Assistant discussions\n\nAssistant material — not meeting speech or agreed decisions.\n'+linked.map(r=>`\n### ${Math.floor(r.atMediaMs/60000)}:${String(Math.floor(r.atMediaMs/1000)%60).padStart(2,'0')} · ${r.status}\n\n${plain(r.question)||'Question pending transcription'}\n\n${r.threadId?`[Continue in Wizard](/wizard/?session=${encodeURIComponent(r.threadId)})`:'Delivery pending'}${r.answer?'\n\nAssistant answer: '+plain(r.answer):''}\n`).join('');
 }

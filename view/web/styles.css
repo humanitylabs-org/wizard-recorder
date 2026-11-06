@@ -521,7 +521,7 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 .live-card .la-fail { display: flex; align-items: flex-end; gap: 10px; justify-content: space-between; }
 .live-card .err { overflow-wrap: anywhere; word-break: break-word; }
 
-/* ── live mode v3: no words bar; dismissable cards; Archimedes section ── */
+/* ── live mode v3: no words bar; dismissable cards; Assistant section ── */
 .live-card { cursor: pointer; }
 .live-card header .x { margin: -6px -8px -6px 2px; width: 30px; height: 30px; color: var(--w-text-3); }
 .live-card header .x .w-ic { width: 16px; height: 16px; }

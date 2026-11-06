@@ -2,21 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { publicAgents, transcriptPacket, threadTitle, validAgentId, stamp } from './agent-router.mjs';
 
-test('agents: main first and named Archimedes, bad ids and stopped agents dropped', () => {
+test('agents: main first and named Primary fixture, bad ids and stopped agents dropped', () => {
   const list = publicAgents({ agents: [
     { id: 'quick', label: 'Quick', status: 'running' },
-    { id: 'hermes', label: 'Hermes', status: 'running' },
+    { id: 'hermes', label: 'Primary fixture', status: 'running' },
     { id: 'Bad Id', label: 'x', status: 'running' },
     { id: 'old', label: 'Old', status: 'stopped' },
-    { id: 'philosopher', label: 'Philosopher', status: 'running', privacy: 'private' },
+    { id: 'private-fixture', label: 'Private fixture', status: 'running', privacy: 'private' },
   ] });
-  assert.deepEqual(list.map((a) => a.id), ['hermes', 'philosopher', 'quick']);
-  assert.equal(list[0].label, 'Archimedes');
+  assert.deepEqual(list.map((a) => a.id), ['hermes', 'private-fixture', 'quick']);
+  assert.equal(list[0].label, 'Primary fixture');
   assert.equal(list[1].privacy, 'private');
 });
 
 test('agent ids are strict', () => {
-  assert.ok(validAgentId('archimedes-new'));
+  assert.ok(validAgentId('primary-new'));
   assert.ok(!validAgentId('../hermes'));
   assert.ok(!validAgentId(''));
 });
@@ -31,20 +31,20 @@ test('packet: note first, memory, notes, timestamped transcript', () => {
   assert.match(p.text, /# Standup/);
   assert.match(p.text, /- Build router \[01:05\]/);
   assert.match(p.text, /## Notes\n\nShip router/);
-  assert.match(p.text, /## Summary \(Mizel\)\n\n- Decided X/);
+  assert.match(p.text, /## Summary \(Recorder\)\n\n- Decided X/);
   assert.match(p.text, /\[00:00\] Hello\n\[01:05\] Next item/);
   assert.equal(p.segments, 2);
   assert.equal(p.truncated, false);
 });
 
 test('packet: default instruction names the agent when no note', () => {
-  const p = transcriptPacket({ meeting: { title: '', segments: [] }, summary: null, agentLabel: 'Philosopher' });
-  assert.match(p.text, /\(Philosopher\)/);
+  const p = transcriptPacket({ meeting: { title: '', segments: [] }, summary: null, agentLabel: 'Private fixture' });
+  assert.match(p.text, /\(Private fixture\)/);
   assert.match(p.text, /\(No transcript yet\.\)/);
 });
 
 test('title and stamp', () => {
-  assert.equal(threadTitle('Standup', 'Quick'), 'Mizel · Standup → Quick');
+  assert.equal(threadTitle('Standup', 'Quick'), 'Recorder · Standup → Quick');
   assert.ok(threadTitle('x'.repeat(200), 'Quick').length <= 90);
   assert.equal(stamp(3_725_000), '1:02:05');
 });

@@ -28,6 +28,7 @@ function custodyFixture({failure}={}) {
  const marker={id:'marker',captureId:'capture',atMediaMs:1,voiceTakeId:'voice',endedAt:'ended'};
  f.c.fetch=async path=>{
   if(path.includes('audio.wav')){if(failure==='audio-http')return new Response('',{status:503});const b=Buffer.from(wav);if(failure==='pcm')b.writeInt16LE(7,44);return new Response(b);}
+  if(path.includes('orb-events') && failure==='marker-http')return new Response('',{status:503});
   if(path.includes('orb-events'))return new Response(JSON.stringify({events:failure==='marker'?[]:[marker]}));
   return new Response(JSON.stringify({id:'original',status:failure==='stop'?'recording':'ready',jobs:{},audio:{tracks:[{source:'me',chunks:failure==='chunks'?0:1}]}}));
  };
@@ -36,5 +37,10 @@ function custodyFixture({failure}={}) {
  const engine=new f.c.Engine('original',{});engine.captureId='capture';engine.finalSeq={me:0};engine.result={id:'capture',streamChunks:[{source:'me',seq:0,startMs:0,durationMs:1,blob:new Blob([wav])}],meta:{handoffs:[marker]}};
  return {...f,engine,ack:()=>ack};
 }
-for(const failure of ['stop','chunks','audio-http','pcm','marker'])test(`durable acknowledgement blocked by ${failure}; original retained`,async()=>{const f=custodyFixture({failure});const original=f.engine.result;await assert.rejects(f.engine.acknowledge());assert.equal(f.ack(),0);assert.equal(f.engine.result,original);assert.equal(f.engine.captureId,'capture');if(failure!=='stop')assert.equal(f.state.current.status,'ready');});
-test('false offline permits ack only after canonical stop, exact PCM and all original marker identities',async()=>{const f=custodyFixture();await f.engine.acknowledge();assert.equal(f.ack(),1);});
+for(const failure of ['stop','chunks','audio-http','pcm'])test(`durable acknowledgement blocked by ${failure}; original retained`,async()=>{const f=custodyFixture({failure});const original=f.engine.result;await assert.rejects(f.engine.acknowledge());assert.equal(f.ack(),0);assert.equal(f.engine.result,original);assert.equal(f.engine.captureId,'capture');if(failure!=='stop')assert.equal(f.state.current.status,'ready');});
+test('false offline permits ack only after canonical stop and exact PCM',async()=>{const f=custodyFixture();await f.engine.acknowledge();assert.equal(f.ack(),1);});
+for(const failure of ['marker','marker-http'])test(`verified audio saves after bounded orb metadata retry: ${failure}`,async()=>{
+ const f=custodyFixture({failure});let waits=0;
+ f.c.setTimeout=(fn,ms)=>{assert.equal(ms,1500);waits++;queueMicrotask(fn);return 0;};
+ await f.engine.acknowledge();assert.equal(f.ack(),1);assert.equal(waits,3);
+});

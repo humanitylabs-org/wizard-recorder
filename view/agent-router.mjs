@@ -1,23 +1,22 @@
 import { ownerIdentityPrompt } from './owner-identity.mjs';
 
 // Agent router: the owner picks which Wizard agent a recording (or a manual ask) goes to.
-// Nothing here runs on its own. A transcript leaves Mizel only when the owner taps Send.
-export const MAIN_AGENT = 'hermes';
+// Nothing here runs on its own. A transcript leaves Recorder only when the owner taps Send.
+export const MAIN_AGENT = '';
 const AGENT_ID = /^[a-z][a-z0-9-]{0,30}$/;
 const TRANSCRIPT_CAP = 600_000;
 
-// The main Hermes agent is Archimedes to the owner; the registry calls it "Hermes".
+// Display names and default status come from the installed shell registry.
 export function agentLabel(agent) {
-  if (agent.id === MAIN_AGENT) return 'Archimedes';
   return String(agent.label || agent.name || agent.id).slice(0, 60);
 }
 
 export function publicAgents(payload) {
   const rows = Array.isArray(payload?.agents) ? payload.agents : [];
   const list = rows
-    .filter((a) => a && typeof a.id === 'string' && AGENT_ID.test(a.id) && a.status !== 'stopped' && a.status !== 'removed')
-    .map((a) => ({ id: a.id, label: agentLabel(a), privacy: a.privacy === 'private' ? 'private' : 'standard', status: a.status || 'unknown' }));
-  list.sort((a, b) => (a.id === MAIN_AGENT ? -1 : b.id === MAIN_AGENT ? 1 : a.label.localeCompare(b.label)));
+    .filter((a) => a && typeof a.id === 'string' && AGENT_ID.test(a.id) && a.role !== 'recovery' && a.status !== 'stopped' && a.status !== 'removed')
+    .map((a) => ({ id: a.id, label: agentLabel(a), privacy: a.privacy === 'private' ? 'private' : 'standard', is_default:a.is_default===true, status: a.status || 'unknown' }));
+  list.sort((a, b) => (a.is_default!==b.is_default ? (a.is_default?-1:1) : a.label.localeCompare(b.label)));
   return list;
 }
 
@@ -30,10 +29,10 @@ export function stamp(ms) {
   return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${pad(m)}:${pad(s % 60)}`;
 }
 
-function bangkok(iso) {
+function localDate(iso) {
   const d = new Date(iso || Date.now());
   if (Number.isNaN(d.getTime())) return '';
-  return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Bangkok', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+  return new Intl.DateTimeFormat('en-GB', { timeZone: process.env.TZ || 'UTC', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
 }
 
 // One self-contained message: the owner's note first, then the recording as Markdown.
@@ -41,9 +40,9 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
   const title = (meeting?.title || 'Untitled recording').trim();
   const lines = [];
   const ask = String(note || '').trim();
-  lines.push(ask || `This Mizel.ai recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
+  lines.push(ask || `This Recorder recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
   lines.push('', ownerIdentityPrompt(), '', '---', '', `# ${title}`);
-  const meta = [bangkok(meeting?.started_at) && `${bangkok(meeting.started_at)} (Bangkok)`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Mizel.ai'].filter(Boolean);
+  const meta = [localDate(meeting?.started_at) && `${localDate(meeting.started_at)} (${process.env.TZ || 'UTC'})`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Recorder'].filter(Boolean);
   lines.push(meta.join(' · '));
   const attendees = meeting?.calendar_event?.attendees;
   if (Array.isArray(attendees) && attendees.length) lines.push(`Attendees: ${attendees.slice(0, 30).join(', ')}`);
@@ -56,7 +55,7 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
     }
   }
   const enhanced = typeof meeting?.enhanced?.markdown === 'string' ? meeting.enhanced.markdown.replace(/[\u0000-\u0008\u000e-\u001f\u2063]/g, '').trim() : '';
-  if (enhanced) lines.push('', '## Summary (Mizel)', '', enhanced.replace(/^# .*\n?/, '').trim());
+  if (enhanced) lines.push('', '## Summary (Recorder)', '', enhanced.replace(/^# .*\n?/, '').trim());
   const notes = typeof meeting?.notes === 'string' ? meeting.notes.trim() : '';
   if (notes) lines.push('', '## Notes', '', notes);
   const segments = (meeting?.segments || []).filter((s) => s?.text && s.text.trim());
@@ -75,5 +74,5 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
 }
 
 export function threadTitle(meetingTitle, label) {
-  return `Mizel · ${String(meetingTitle || 'Recording').slice(0, 48)} → ${label}`.slice(0, 90);
+  return `Recorder · ${String(meetingTitle || 'Recording').slice(0, 48)} → ${label}`.slice(0, 90);
 }

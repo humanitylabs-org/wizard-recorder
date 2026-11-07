@@ -871,14 +871,14 @@ setInterval(loadDiscussions,3000);
 const openOrbAnswers = new Set(); // keep an opened answer open across live re-renders
 function discussionCard(e) {
   const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled':e.status==='local'?'On-device':'Orb · '+e.status;
-  return h('section',{class:'orb-note',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)},title:'Assistant material · not meeting speech or an agreed decision'},
-    h('div',{class:'orb-note-head'},
+  return h('section',{class:'ask-note',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)},title:'Assistant material · not meeting speech or an agreed decision'},
+    h('div',{class:'ask-note-head'},
       h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),
-      h('span',{class:'orb-note-label',text:label}),
-      e.threadId&&h('a',{class:'orb-note-open',href:threadHref(e.threadId),target:'_top',text:'Open chat'})),
-    h('p',{class:'orb-note-q',text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Voice note')}),
-    e.answer&&h('details',{class:'orb-note-a',open:openOrbAnswers.has(e.id),ontoggle:ev=>ev.target.open?openOrbAnswers.add(e.id):openOrbAnswers.delete(e.id)},h('summary',{text:'Answer'}),h('p',{text:e.answer})),
-    e.error&&h('p',{class:'orb-note-err',text:e.error}));
+      h('span',{class:'ask-note-label',text:label}),
+      e.threadId&&h('a',{class:'ask-note-open',href:threadHref(e.threadId),target:'_top',text:'Open chat'})),
+    h('p',{class:'ask-note-q',text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Voice note')}),
+    e.answer&&h('details',{class:'ask-note-a',open:openOrbAnswers.has(e.id),ontoggle:ev=>ev.target.open?openOrbAnswers.add(e.id):openOrbAnswers.delete(e.id)},h('summary',{text:'Answer'}),h('p',{text:e.answer})),
+    e.error&&h('p',{class:'ask-note-err',text:e.error}));
 }
 function discussionSection(id) {
   const rows=(linkedDiscussions.get(id)||[]).filter(e=>!['cancelled','paused','local'].includes(e.status));
@@ -2107,9 +2107,11 @@ function syncAppOrb() {
   if (!WizardApp.orb) return;
   const want = els.app?.dataset.view !== 'meeting';
   if (want === orbClaimed) return; orbClaimed = want;
-  if (want) WizardApp.orb.claim({ icon: 'plus', label: 'New recording' }, () => { if (!els.btnNewMobile.disabled) newMeeting(); })
-    .then((shown) => document.documentElement.classList.toggle('orb-claimed', shown === true), () => {});
-  else void WizardApp.orb.release().then(() => document.documentElement.classList.remove('orb-claimed'));
+  const orbButton = { icon: 'plus', label: 'New recording' };
+  const orbTap = () => { if (!els.btnNewMobile.disabled) newMeeting(); };
+  if (want) WizardApp.orb.claim(orbButton, orbTap)
+    .then((shown) => document.documentElement.classList.toggle('wizard-orb-claimed', shown === true), () => {});
+  else void WizardApp.orb.release().then(() => document.documentElement.classList.remove('wizard-orb-claimed'));
 }
 const appCanGoBack = () => !!overlay || !!(els.docActions && $('.w-menu', els.docActions)) || state.drawerOpen || state.route.view !== 'home';
 WizardApp.back.useHistory({ isRoot: () => !appCanGoBack() });

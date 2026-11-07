@@ -50,7 +50,8 @@ if a.push_ghcr:
         try:
             with urllib.request.urlopen(request) as response:raise SystemExit('Refusing existing immutable image tag '+tag)
         except urllib.error.HTTPError as error:
-            if error.code!=404:raise
+            # GHCR answers 403 (not 404) for a package that does not exist yet; docker push then creates it.
+            if error.code not in (403,404):raise
     if a.release_version:assert os.environ.get('GITHUB_REF')=='refs/tags/v'+version
 a.output.mkdir(parents=True,exist_ok=True)
 receipt={'commit':a.commit,'version':version,'image':image,'architectures':{}}

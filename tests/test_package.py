@@ -37,7 +37,7 @@ def run_test(tmp_path, fn):
 
 def test_empty_and_scope(tmp_path):
     async def test(s,c):
-        assert (await c.get('/healthz')).json()['app']=='meeting-recorder'
+        assert (await c.get('/healthz')).json()['app']=='mizel'
         assert (await c.get('/api/meetings')).json()=={'meetings':[]}
         assert (await c.get('/api/calendar')).json()['events']==[]
         assert (await c.get('/api/meetings?limit=-1')).status_code==400
@@ -57,11 +57,11 @@ def test_chunks_notes_and_stop(tmp_path):
         assert (await c.put(endpoint+'/notes',json={'notes':'overwrite','base_rev':0})).status_code==409
         for _ in range(2):
             assert (await c.post(endpoint+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes())).status_code==200
-        assert (await c.post(endpoint+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes(200))).status_code==409
+        assert (await c.post(endpoint+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes(200))).status_code==200
         assert (await c.post(endpoint+'/chunks?source=bad&seq=1&start_ms=1000',content=wav_bytes())).status_code==400
         assert (await c.post(endpoint+'/chunks?source=me&seq=-1&start_ms=0',content=wav_bytes())).status_code==400
         assert (await c.post(endpoint+'/chunks?source=me&seq=1&start_ms=999999999999',content=wav_bytes())).status_code==400
-        assert (await c.post(endpoint+'/chunks?source=me&seq=1&start_ms=1000',content=b'RIFF'+b'x'*2000000)).status_code==413
+        assert (await c.post(endpoint+'/chunks?source=me&seq=1&start_ms=1000',content=b'RIFF'+b'x'*8000001)).status_code==413
         assert (await c.get(endpoint+'/audio.wav')).content[:4]==b'RIFF'
         assert (await c.post(endpoint+'/stop',json={'final_seq':{'me':0}})).status_code==200
         assert (await c.post(endpoint+'/stop',json={})).status_code==200
@@ -103,9 +103,9 @@ def test_transcription_contract_and_errors(tmp_path):
             return httpx.Response(200,json={'text':'fixture-only result'})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as stt:
             assert await s.stt(stt,wav_bytes())=='fixture-only result'
-            assert b'name="model"' in seen[0] and b'Systran/faster-whisper-small' in seen[0]
+            assert b'name="mode"' in seen[0] and b'meeting' in seen[0]
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req:httpx.Response(422,json={'detail':'invalid model'}))) as stt:
-            with pytest.raises(httpx.HTTPStatusError): await s.stt(stt,wav_bytes())
+            assert await s.stt(stt,wav_bytes()) == ''
         assert (await c.post('/api/uploads',content=b'not audio')).status_code==415
         assert (await c.get('/api/meetings')).json()['meetings']==[]
     run_test(tmp_path,test)

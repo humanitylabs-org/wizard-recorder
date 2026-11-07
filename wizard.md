@@ -1,11 +1,14 @@
 ---
 wizard: 0.2
-id: meeting-recorder
-name: Meeting Recorder
+id: mizel
+name: Mizel.ai
 type: service
 category: app
+voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, meetings, notes]
-version: 0.1.0
+privacy: private
+# James, 23 Oct 2026: "The whole point of Mizel was to be fully private so no public agent can read its transcripts."
+version: 0.2.0
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
@@ -19,20 +22,16 @@ api:
   path: /api
   spec: openapi.json
 mcp:
-  path: /mcp
+  path: /meetings/mcp
   port: 8080
   transport: streamable-http
 skill: SKILL.md
 view:
   path: /
   port: 8080
-  source:
-    path: web
-    build: python3 app/build_view.py
-    dist: web
 provides: [meeting-recording, meeting-transcripts]
 system: false
-uses: [transcriber]
+uses: []
 needs: [mic]
 agent_binding:
   required: false

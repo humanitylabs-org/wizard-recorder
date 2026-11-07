@@ -1,6 +1,6 @@
 services:
-  meeting-recorder:
-    image: ghcr.io/humanitylabs-org/meeting-recorder:0.1.0
+  mizel:
+    image: ghcr.io/humanitylabs-org/meeting-recorder:0.2.0
     user: 1000:1000
     read_only: true
     cap_drop: [ALL]

@@ -1,0 +1,7 @@
+*
+!app/requirements.txt
+!app/server.py
+!app/package_routes.py
+!app/audio_playback.py
+!app/agent_delivery.py
+!openapi.json

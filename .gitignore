@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.data/
+data/
+*.sqlite*
+*.wav
+*.mp3
+*.mp4
+*.webm
+*.tar.gz
+node_modules/

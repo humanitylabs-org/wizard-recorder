@@ -1,0 +1,27 @@
+name: Quality
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 scripts/check_release.py
+      - run: python3 -m pip install -r app/requirements.txt pytest
+      - run: python3 -m pytest tests -q
+      - run: python3 -m compileall -q app scripts start.py tests
+  reuse:
+    if: github.event_name == 'pull_request'
+    uses: humanitylabs-org/wizard-ux/.github/workflows/reuse-check-app.yml@main
+    permissions:
+      contents: read

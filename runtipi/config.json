@@ -1,0 +1,68 @@
+{
+  "name": "Mizel.ai",
+  "id": "mizel",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Record meetings and search shared-transcriber transcripts.",
+  "author": "Humanity Labs",
+  "port": 8973,
+  "categories": [
+    "utilities"
+  ],
+  "description": "Empty-by-default recorder backend with notes, native capture, audio upload, HTTP API, MCP and shared transcription.",
+  "tipi_version": 1,
+  "version": "0.2.0",
+  "source": "https://github.com/humanitylabs-org/wizard-recorder",
+  "exposable": false,
+  "supported_architectures": [
+    "amd64",
+    "arm64"
+  ],
+  "created_at": 1791850000000,
+  "updated_at": 1791850000000,
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "form_fields": [
+    {
+      "type": "text",
+      "label": "Shared transcription slot API (optional)",
+      "env_variable": "TRANSCRIPTION_URL",
+      "required": false,
+      "default": "http://transcriber:8000/v1/audio/transcriptions",
+      "hint": "Container-network endpoint of the selected transcription provider. The default points at the Transcriber app. No model is bundled."
+    },
+    {
+      "type": "text",
+      "label": "Shared transcription model (optional)",
+      "env_variable": "TRANSCRIPTION_MODEL",
+      "required": false,
+      "default": "Systran/faster-whisper-small"
+    },
+    {
+      "type": "text",
+      "label": "Additional trusted browser origins (optional)",
+      "env_variable": "MEETINGS_ALLOWED_ORIGINS",
+      "required": false,
+      "hint": "Same-host origins work automatically. Add comma-separated exact origins only if needed.",
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Trusted ingress hosts (optional)",
+      "env_variable": "MEETINGS_ALLOWED_HOSTS",
+      "required": false,
+      "hint": "Comma-separated host:port values. Blank uses the owner-authenticated Wizard ingress.",
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Timezone (optional)",
+      "env_variable": "MEETINGS_TIMEZONE",
+      "required": false,
+      "default": "UTC"
+    }
+  ],
+  "no_gui": false
+}

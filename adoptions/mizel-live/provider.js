@@ -3,16 +3,34 @@ import { TinfoilAI } from 'tinfoil';
 
 export class TinfoilProvider {
   constructor(apiKey, client = null, realtimeModel = 'voxtral-mini-4b-realtime', summaryModel = 'deepseek-v4-1-flash') {
+    this.apiKey = apiKey; this.injected = !!client;
     this.client = client || new TinfoilAI({ apiKey });
     this.realtimeModel = realtimeModel;
     this.summaryModel = summaryModel;
   }
+  // Tinfoil rotates enclave certificates; a long-lived client keeps the old attested key and then
+  // fails every call with "TLS pinning failed". Re-attest with a fresh client (at most once a minute).
+  refresh(error) {
+    const text = String(error?.message || '') + ' ' + String(error?.cause?.message || '');
+    if (this.injected || !/pinning|attest|certificate|Connection error/i.test(text)) return false;
+    if (Date.now() - (this.refreshedAt || 0) < 60000) return false;
+    this.refreshedAt = Date.now(); this.client = new TinfoilAI({ apiKey: this.apiKey });
+    console.error('mizel-live: re-attesting Tinfoil client after: ' + text.trim().slice(0, 120));
+    return true;
+  }
   async openRealtime(handlers) {
-    const transcriber = new NativeRealtimeTranscriber(this.client, this.realtimeModel, handlers);
-    await transcriber.open();
-    return transcriber.api();
+    const wrapped = { ...handlers, failed: (e) => { this.refresh(e); return handlers.failed?.(e); }, error: (e) => { this.refresh(e); return handlers.error?.(e); } };
+    try {
+      const transcriber = new NativeRealtimeTranscriber(this.client, this.realtimeModel, wrapped);
+      await transcriber.open();
+      return transcriber.api();
+    } catch (e) { this.refresh(e); throw e; }
   }
   async summarize(input) {
+    try { return await this.summarizeOnce(input); }
+    catch (e) { if (this.refresh(e)) return this.summarizeOnce(input); throw e; }
+  }
+  async summarizeOnce(input) {
     const response = await this.client.chat.completions.create({
       model: this.summaryModel, response_format: { type: 'json_object' }, temperature: 0,
       messages: [{

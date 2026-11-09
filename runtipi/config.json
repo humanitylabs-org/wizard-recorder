@@ -58,6 +58,14 @@
     },
     {
       "type": "text",
+      "label": "Owner name in notes (optional)",
+      "env_variable": "MEETINGS_OWNER_NAME",
+      "required": false,
+      "hint": "Notes, titles and action items name this person instead of 'Me'. Blank keeps 'Me'.",
+      "default": ""
+    },
+    {
+      "type": "text",
       "label": "Timezone (optional)",
       "env_variable": "MEETINGS_TIMEZONE",
       "required": false,

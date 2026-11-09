@@ -303,7 +303,7 @@ body { overflow: hidden; }
 .recorder {
   position: absolute; z-index: 14; left: 50%; bottom: calc(22px + var(--w-safe-bottom)); transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 18px; max-width: calc(100% - 24px);
-  background: #16171d; backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  background: var(--w-bg-raised); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4);
   box-shadow: var(--w-shadow-float), 0 0 calc(var(--lvl, 0) * 46px) calc(var(--lvl, 0) * 2px) rgba(124,92,240,.35);
   animation: rec-in var(--w-t-sheet) var(--w-ease); transition: box-shadow 140ms linear;
 }
@@ -477,7 +477,7 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 }
 .live > * { pointer-events: auto; }
 .live-card {
-  background: #16171d; backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  background: var(--w-bg-raised); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4);
   border: 1px solid var(--w-wiz-line); border-radius: 16px; padding: 10px 14px 12px; box-shadow: var(--w-wiz-glow);
   animation: live-in 220ms var(--w-ease, ease-out); max-height: 42vh; overflow: auto;
 }
@@ -499,7 +499,7 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 .live-card .dots i:nth-child(2) { animation-delay: .15s; } .live-card .dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes dot { 40% { opacity: 1; } }
 .live-words {
-  background: #0f1014; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  background: var(--w-bg); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--w-line); border-radius: 14px; padding: 7px 12px 8px;
 }
 .live-words .lw-status { display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--w-text-3); }
@@ -683,5 +683,17 @@ html[data-native-recorder="1"] .recorder { display: none !important; }
 @media (max-width: 760px) { .route-sheet { width: 100%; } }
 
 /* Wizard's agent orb is the New recording button (WizardApp.orb.claim): ours steps aside. */
-html.orb-claimed .rec-fab { display: none !important; }
-@media (max-width: 760px) { html.orb-claimed .side-foot { padding-right: 88px; } }
+html.wizard-orb-claimed .rec-fab { display: none !important; }
+@media (max-width: 760px) { html.wizard-orb-claimed .side-foot { padding-right: 88px; } }
+
+/* Orb voice notes inside a meeting: a quiet aside, not a card. No entry animation: the transcript
+   re-renders every few seconds while recording, and an animated card flickered each time (James, 6 Nov 2026). */
+.ask-note { margin: 4px 0 8px; padding: 6px 0 6px 12px; border-left: 2px solid color-mix(in srgb, var(--w-wiz) 55%, transparent); font-size: var(--w-fs-small); color: var(--w-text-2); animation: none; }
+.ask-note-head { display: flex; align-items: center; gap: 8px; font-size: var(--w-fs-caption); color: var(--w-text-3); }
+.ask-note-head .sum-at { min-height: 0; }
+.ask-note-label { font-weight: 600; color: var(--w-text-2); }
+.ask-note-open { margin-left: auto; color: var(--w-text-3); text-decoration: underline; text-underline-offset: 2px; }
+.ask-note-q { margin: 3px 0 0; line-height: 1.45; }
+.ask-note-a summary { margin-top: 3px; font-size: var(--w-fs-caption); color: var(--w-text-3); cursor: pointer; }
+.ask-note-a p { margin: 4px 0 0; white-space: pre-wrap; line-height: 1.45; }
+.ask-note-err { margin: 3px 0 0; font-size: var(--w-fs-caption); color: var(--w-danger); }

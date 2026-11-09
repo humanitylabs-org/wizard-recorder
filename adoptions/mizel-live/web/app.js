@@ -203,10 +203,9 @@ const state = {
   lastEnhancedAt: null,
 };
 const els = {};
-const prefs = {
-  get systemAudio() { return localStorage.getItem('meetings.systemAudio') === '1'; },
-  set systemAudio(v) { localStorage.setItem('meetings.systemAudio', v ? '1' : '0'); },
-};
+// Computer audio is never a start-of-meeting setting: the browser asks the owner to pick a
+// window/tab to share, so it is only requested when they press "Them" during a meeting.
+try { localStorage.removeItem('meetings.systemAudio'); } catch {}
 const draftKey = (id) => `meetings.draft.${id}`;
 
 function parseHash() {
@@ -868,15 +867,17 @@ async function loadDiscussions() {
   }catch{}finally{discussionLoading=false;}
 }
 setInterval(loadDiscussions,3000);
+const openOrbAnswers = new Set(); // keep an opened answer open across live re-renders
 function discussionCard(e) {
-  const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled orb interruption':e.status==='local'?'On-device operation':'Orb request · '+e.status;
-  return h('section',{class:'qa orb-event',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)}},
-    h('header',{},h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),' ',h('strong',{text:label})),
-    h('p',{text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Question pending transcription')}),
-    h('small',{text:'Assistant material · not meeting speech or an agreed decision'}),
-    e.threadId&&h('p',{},h('a',{class:'w-btn w-btn-sm',href:threadHref(e.threadId),target:'_top',text:'Continue in Wizard'})),
-    e.answer&&h('details',{},h('summary',{text:'Assistant answer'}),h('p',{text:e.answer})),
-    e.error&&h('p',{text:e.error}));
+  const label=['sent','answered'].includes(e.status)?'Asked Archimedes':e.status==='cancelled'?'Cancelled':e.status==='local'?'On-device':'Orb · '+e.status;
+  return h('section',{class:'ask-note',dataset:{orbEvent:e.id,atMediaMs:String(e.atMediaMs)},title:'Assistant material · not meeting speech or an agreed decision'},
+    h('div',{class:'ask-note-head'},
+      h('button',{class:'sum-at',type:'button',text:fmtClock(e.atMediaMs),onclick:()=>jumpTo(e.atMediaMs)}),
+      h('span',{class:'ask-note-label',text:label}),
+      e.threadId&&h('a',{class:'ask-note-open',href:threadHref(e.threadId),target:'_top',text:'Open chat'})),
+    h('p',{class:'ask-note-q',text:e.question||(['cancelled','local'].includes(e.status)?'Nothing sent to Archimedes.':'Voice note')}),
+    e.answer&&h('details',{class:'ask-note-a',open:openOrbAnswers.has(e.id),ontoggle:ev=>ev.target.open?openOrbAnswers.add(e.id):openOrbAnswers.delete(e.id)},h('summary',{text:'Answer'}),h('p',{text:e.answer})),
+    e.error&&h('p',{class:'ask-note-err',text:e.error}));
 }
 function discussionSection(id) {
   const rows=(linkedDiscussions.get(id)||[]).filter(e=>!['cancelled','paused','local'].includes(e.status));
@@ -1106,7 +1107,7 @@ async function pollDetail() {
 // Platform capture is exclusively WizardApp; this app owns domain uploads and finalization.
 const captureCaps = () => { try { return WizardApp.capture.capabilities({ kind: 'meeting' }); } catch { return {}; } };
 const supportsSystemAudio = () => !!captureCaps().systemAudio;
-function prewarmCapture() { return WizardApp.capture.prepare({ kind: 'meeting', pcm: true, systemAudio: prefs.systemAudio && !!captureCaps().systemAudioStart }); }
+function prewarmCapture() { return WizardApp.capture.prepare({ kind: 'meeting', pcm: true, systemAudio: false }); }
 function discardWarm(w) { w?.release?.(); }
 
 // In-memory upload queue with exponential backoff; one request in flight at a time.
@@ -1195,8 +1196,14 @@ class SharedMeeting {
       if(e.code!=='native_upload_pending')throw e;this.cbs.onQueue();await new Promise(resolve=>setTimeout(resolve,1500));
     }}
     const markers=this.result?.meta?.handoffs||[];
-    if(markers.length){const saved=await api(`orb-events?meetingId=${enc(this.meetingId)}`);
-      if(markers.some(m=>!saved.events?.some(e=>e.id===m.id&&e.captureId===this.captureId&&e.atMediaMs===m.atMediaMs&&(!m.voiceTakeId||e.voiceTakeId===m.voiceTakeId)&&(!m.endedAt||e.endedAt===m.endedAt))))throw new Error('Linked orb events are still syncing · capture retained. Retry save.');
+    // The audio is already verified on the server above. Orb-event links are metadata: give the shell's
+    // journal a few seconds to sync, then save anyway. A failed or abandoned orb press (e.g. the phone's
+    // storage timed out mid-handoff) must never hold the whole meeting hostage (James, 6 Nov 2026).
+    if(markers.length){for(let i=0;i<4;i++){let saved=null;try{saved=await api(`orb-events?meetingId=${enc(this.meetingId)}`);}catch{}
+      const missing=markers.filter(m=>!saved?.events?.some(e=>e.id===m.id&&e.captureId===this.captureId));
+      if(!missing.length)break;
+      if(i===3){console.warn('mizel: saving without '+missing.length+' unsynced orb event(s)');break;}
+      await new Promise(resolve=>setTimeout(resolve,1500));}
     }
     await WizardApp.capture.ack(this.captureId);this.detach();
     try {const hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');if(hint?.id===this.captureId)sessionStorage.removeItem('mizel.sharedCapture');}catch{} }
@@ -1245,11 +1252,36 @@ function showParticipantsHint() {
   els.pill.parentElement.append(el);
   setTimeout(() => { el.classList.add('is-leaving'); setTimeout(() => el.remove(), 400); }, PARTICIPANTS_HINT_MS);
 }
+// A rejected Start is not evidence of an empty recorder: it may have obtained a session before
+// observer/storage setup failed. Only the app can prove its own memory is empty, and shared custody
+// must independently report no current/pending take. Never cancel, acknowledge or discard on error.
+async function clearEmptyFailedStart(r) {
+  const retained = () => failedStartOwnsMemory(r);
+  if (!r || state.rec !== r || r.phase !== 'error' || retained()) return false;
+  try {
+    if (WizardApp.capture.current() || (await WizardApp.capture.pending()).length) return false;
+    // The read yielded: a new Start, recovered session or buffered chunk wins over this old cleanup.
+    if (state.rec !== r || r.phase !== 'error' || retained() || WizardApp.capture.current()) return false;
+  } catch { return false; } // Unknown custody stays held and retryable.
+  r.engine?.detach?.(); r.engine = null; r.emptyStartProven = true;
+  recordingUpdateHold?.release(); recordingUpdateHold = null; stopPillClock();
+  return true;
+}
+function failedStartOwnsMemory(r) {
+  const e = r?.engine;
+  return !!(e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
+}
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
   const m = state.current; if (!m || deletingMeetings.has(m.id)) return;
   if (state.rec && state.rec.phase !== 'error') return;
   if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
-  if (state.rec) endRecSession();
+  if (state.rec) {
+    const r = state.rec;
+    if (!await clearEmptyFailedStart(r)) { if (state.rec === r && !failedStartOwnsMemory(r)) await reattachShared(r); return; }
+    if (state.rec !== r) return; // Another same-task waiter may already own the next engine.
+    endRecSession();
+  }
+  if (state.current !== m || deletingMeetings.has(m.id)) return;
   const cbs = {
     onLevel: (lvl) => updateLevel(lvl),
     onQueue: () => renderPillQueue(),
@@ -1263,9 +1295,9 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
     offsetMs=Math.max(m.duration_ms||0,...(m.segments||[]).map(s=>s.end_ms||0),(seqBase.me||0)*5000); }
   const engine=new SharedMeeting(m.id,cbs,{warm,seqBase,offsetMs});
   state.rec = { meetingId: m.id, title: m.title, engine, phase: 'starting', paused: false, error: null };
-  renderDoc(); renderRecBanner();
+  renderDoc(); renderRecBanner(); startPillClock();
   try {
-    await engine.start({ systemAudio: prefs.systemAudio });
+    await engine.start({ systemAudio: false });
     if (state.rec?.engine !== engine) return;
     state.rec.phase = 'recording';
     if (fresh && !resume && state.current?.id === m.id) showParticipantsHint();
@@ -1274,14 +1306,17 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
     if (state.current?.id === m.id && state.current.status !== 'recording') setCurrent({ ...state.current, status: 'recording' });
     if (state.current?.id === m.id && !isImported(m) && !els.notepad.hidden && !mobileMQ.matches) els.notepad.focus({ preventScroll: true });
   } catch (e) {
-    try { await engine.abort(); } catch { /* ignore */ }
+    // Start can reject after obtaining a live session. Retain it for Stop/Retry, never abort audio.
+    discardWarm(engine.warm); engine.warm = null;
     if (state.rec?.engine !== engine) return;
-    state.rec.phase = 'error'; state.rec.engine = null;
-    state.rec.error = e?.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser or system settings, then try again.'
+    const r = state.rec; r.phase = 'error';
+    r.error = e?.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it in your browser or system settings, then try again.'
       : e?.name === 'NotFoundError' ? 'No microphone was found.' : `Recording couldn't start: ${e?.message || e}`;
+    await clearEmptyFailedStart(r);
+    if (state.rec !== r) return;
   }
   if (state.current?.id === m.id) renderDoc();
-  renderRecBanner(); schedulePoll(); startPillClock(); notifyNative();
+  renderRecBanner(); schedulePoll(); notifyNative();
 }
 // A recording left paused this long finishes by itself (the phone recorder enforces the same limit natively),
 // so a forgotten pause never holds the summary thread back for hours.
@@ -1335,19 +1370,30 @@ async function retryRecording() {
   renderRecBanner();renderPill();notifyNative();if(state.current?.id===r.meetingId)renderDoc();
 }
 // Rebind fresh app observers after iframe reload. The shell retains the physical recorder and PCM custody.
-async function reattachShared() {
-  if(state.rec)return;
+async function reattachShared(failed = null) {
+  if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
+  let adopted = null;
   try {
-    const current=WizardApp.capture.current();
-    const pending=await WizardApp.capture.pending();
+    let current=WizardApp.capture.current();
+    // Active custody is already positive proof; pending may reject while this exact take is live.
+    const pending=current ? [] : await WizardApp.capture.pending();
+    // Re-entrant recovery/Retry/Stop cannot replace an engine installed by another waiter.
+    if(state.rec !== failed || (failed && (failed.phase !== 'error' || failedStartOwnsMemory(failed))))return;
+    current=WizardApp.capture.current();
     const take=current || pending.find(t=>t.meta?.captureRecovery?.resumable) || pending[0];
-    if(!take?.meta?.meetingId)return;
-    const id=take.meta.meetingId;
+    let hint;try{hint=JSON.parse(sessionStorage.getItem('mizel.sharedCapture')||'null');}catch{}
+    // No guessed meeting ownership: legacy metadata may use only our exact persisted capture hint.
+    const id=take?.meta?.meetingId || (hint?.id===take?.id ? hint?.meetingId : null);
+    if(!take || !id) {
+      if(failed && take) recordingSaveFailed(failed,Error('Shared audio has no verified meeting link. It is still kept; retry after its owner reconnects.'));
+      return;
+    }
+    failed?.engine?.detach?.();
     const cbs={onLevel:updateLevel,onQueue:renderPillQueue,onState:renderPill,onWarn:msg=>toast(msg,{error:true}),onLive:(samples,at)=>live.audio(samples,at),onNative:onNativeState};
     const engine=new SharedMeeting(id,cbs,{captureId:take.id});
-    state.rec={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
+    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
     if(current || take.meta?.captureRecovery?.resumable) {
-      await engine.start({systemAudio:false});state.rec.phase='recording';state.rec.paused=!!engine.info.paused;
+      await engine.start({systemAudio:false});if(state.rec!==r)return;r.phase='recording';r.paused=!!engine.info.paused;
       if(engine.info.phase==='error'||engine.info.inputStopped){state.rec.phase='error';await stopRecording();return;}
       live.start(id,'',{follow:engine.native&&!engine.livePcm});
     } else {
@@ -1357,12 +1403,12 @@ async function reattachShared() {
         state.rec.deletionConfirmed=true;state.rec.phase='deleting';await finishDeletedRecording(state.rec);return;
       }
       for(const c of take.streamChunks||[])engine.acceptChunk(c);
-      state.rec.phase='uploading';renderPill();await engine.uploader.drain();
+      r.phase='uploading';renderPill();await engine.uploader.drain();if(state.rec!==r)return;
       if(!take.meta?.native?.backendStopOwned)await API.stop(id,{final_seq:engine.finalSeq,reason:take.partial?'process_death':'user'});
-      await engine.acknowledge();endRecSession();void reattachShared();
+      if(state.rec!==r)return;await engine.acknowledge();if(state.rec!==r)return;endRecSession();void reattachShared();return;
     }
-    renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();
-  }catch(e){if(state.rec)recordingSaveFailed(state.rec,e);}
+    renderRecBanner();renderPill();notifyNative();if(state.current?.id===id)renderDoc();return r;
+  }catch(e){if(adopted && state.rec===adopted)recordingSaveFailed(adopted,e);return adopted;}
 }
 
 async function toggleSystemAudio() {
@@ -1380,7 +1426,19 @@ function recordingSaveFailed(r, e) {
   if(state.current?.id===r.meetingId)renderDoc();
 }
 async function stopRecording({ reason = 'user' } = {}) {
-  const r = state.rec; if (!r?.engine || !['recording','error'].includes(r.phase)) return;
+  const r = state.rec; if (!r || !['recording','error'].includes(r.phase)) return;
+  if (!r.engine || (r.phase === 'error' && !r.engine.session && !r.engine.captureId && !r.engine.result)) {
+    if (await clearEmptyFailedStart(r)) { if (state.rec === r) endRecSession(); }
+    else if (state.rec === r && !failedStartOwnsMemory(r)) {
+      const adopted = await reattachShared(r);
+      if (adopted && state.rec === adopted) {
+        // This Stop belongs to the failed meeting, not a different take discovered during recovery.
+        if (adopted.meetingId !== r.meetingId) { navigate(adopted.meetingId); return; }
+        if (['recording','error'].includes(adopted.phase)) return stopRecording({reason});
+      }
+    }
+    return;
+  }
   if (r.deletionConfirmed) return retryRecording();
   const id = r.meetingId; const engine = r.engine;
   clearTimeout(r.pauseTimer);
@@ -1459,7 +1517,7 @@ function renderPill() {
   const meter = () => h('span', { class: 'w-meter', 'aria-hidden': 'true' }, ...BAR_SHAPE.map(() => h('i')));
   const them = h(sysOk ? 'button' : 'span', {
     class: `chan them${themOn ? '' : ' off'}`, type: sysOk ? 'button' : null,
-    title: sysOk ? (themOn ? 'Stop recording computer audio' : 'Also record computer audio (the other side of the call)') : 'Computer audio not available here',
+    title: sysOk ? (themOn ? 'Stop recording computer audio' : 'Also record the other side of a call (your browser will ask which window or tab to share)') : 'Computer audio not available here',
     'aria-label': 'Them: computer audio', 'aria-pressed': sysOk ? String(themOn) : null, onclick: sysOk ? toggleSystemAudio : null,
   }, h('span', { class: 'lbl', text: 'Them' }), meter());
   replace(els.pill,
@@ -2048,9 +2106,11 @@ function syncAppOrb() {
   if (!WizardApp.orb) return;
   const want = els.app?.dataset.view !== 'meeting';
   if (want === orbClaimed) return; orbClaimed = want;
-  if (want) WizardApp.orb.claim({ icon: 'plus', label: 'New recording' }, () => { if (!els.btnNewMobile.disabled) newMeeting(); })
-    .then((shown) => document.documentElement.classList.toggle('orb-claimed', shown === true), () => {});
-  else void WizardApp.orb.release().then(() => document.documentElement.classList.remove('orb-claimed'));
+  const orbButton = { icon: 'plus', label: 'New recording' };
+  const orbTap = () => { if (!els.btnNewMobile.disabled) newMeeting(); };
+  if (want) WizardApp.orb.claim(orbButton, orbTap)
+    .then((shown) => document.documentElement.classList.toggle('wizard-orb-claimed', shown === true), () => {});
+  else void WizardApp.orb.release().then(() => document.documentElement.classList.remove('wizard-orb-claimed'));
 }
 const appCanGoBack = () => !!overlay || !!(els.docActions && $('.w-menu', els.docActions)) || state.drawerOpen || state.route.view !== 'home';
 WizardApp.back.useHistory({ isRoot: () => !appCanGoBack() });
@@ -2076,7 +2136,7 @@ function bind() {
     askMeeting: $('#ask-meeting'), askMeetingInput: $('#ask-meeting-input'),
     drawer: $('#drawer'), segments: $('#segments'), summary: $('#summary'), drawerTabs: $('#drawer-tabs'), drawerCount: $('#drawer-count'), drawerPending: $('#drawer-pending'),
     pill: $('#pill'), live: $('#live'), archView: $('#arch-view'), archSection: $('#arch-section'), archEntry: $('#arch-entry'), askAll: $('#ask-all'), askAllMount: $('#ask-all-mount'), askAllThread: $('#ask-all-thread'), askAllForm: $('#ask-all-form'), askAllInput: $('#ask-all-input'),
-    sysAudioRow: $('#sys-audio-row'), sysAudio: $('#sys-audio'), tip: $('#tip'), overlayRoot: $('#overlay-root'),
+    tip: $('#tip'), overlayRoot: $('#overlay-root'),
     homeDate: $('#home-date'), greeting: $('#greeting'), homeStats: $('#home-stats'), nextUp: $('#next-up'), askSuggest: $('#ask-suggest'),
   });
   if (!IS_MAC) document.querySelectorAll('[data-mod]').forEach((k) => { k.textContent = 'Ctrl K'; });
@@ -2115,9 +2175,6 @@ function bind() {
   els.askMeeting.addEventListener('submit', (e) => { e.preventDefault(); const q = els.askMeetingInput.value; els.askMeetingInput.value = ''; askMeeting(q); });
   els.askAllForm.addEventListener('submit', (e) => { e.preventDefault(); const q = els.askAllInput.value; els.askAllInput.value = ''; askAll(q); });
 
-  els.sysAudioRow.hidden = !captureCaps().systemAudioStart;
-  els.sysAudio.checked = prefs.systemAudio;
-  els.sysAudio.addEventListener('change', () => { prefs.systemAudio = els.sysAudio.checked; });
   els.recBanner.addEventListener('click', () => { if (state.rec) navigate(state.rec.meetingId); });
 
   document.addEventListener('keydown', onKey);
@@ -2126,7 +2183,7 @@ function bind() {
   window.addEventListener('resize', debounce(autogrow, 100));
   window.addEventListener('online', () => { state.rec?.engine?.uploader?.wake?.(); flushNotes(); if (state.current) renderStatus(state.current); renderPillQueue(); });
   window.addEventListener('offline', () => { if (state.current) renderStatus(state.current); renderPillQueue(); });
-  window.addEventListener('beforeunload', (e) => { if (state.rec && state.rec.phase !== 'error') { e.preventDefault(); e.returnValue = ''; } else flushNotes(); });
+  window.addEventListener('beforeunload', (e) => { if (state.rec && (state.rec.phase !== 'error' || state.rec.emptyStartProven !== true)) { e.preventDefault(); e.returnValue = ''; } else flushNotes(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { flushNotes(); refreshAll(); schedulePoll(); } });
   setInterval(() => { if (!document.hidden) { loadCalendar(); if (!state.rec) loadMeetings(); } }, 60000);
 

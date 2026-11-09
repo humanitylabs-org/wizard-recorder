@@ -22,7 +22,7 @@ def wav_bytes(sample=0):
 def run_test(tmp_path, fn, env=None):
     os.environ['MEETINGS_DATA'] = str(tmp_path)
     os.environ['TRANSCRIPTION_URL'] = 'http://fixture/v1/audio/transcriptions'
-    for n in ('MEETINGS_LLM_URL','MEETINGS_LLM_MODEL','MEETINGS_ALLOWED_HOSTS','MEETINGS_ALLOWED_ORIGINS'):
+    for n in ('MEETINGS_LLM_URL','MEETINGS_LLM_MODEL','MEETINGS_ALLOWED_HOSTS','MEETINGS_ALLOWED_ORIGINS','MEETINGS_OWNER_NAME'):
         os.environ.pop(n, None)
     os.environ.update(env or {})
     if 'server' in sys.modules:
@@ -150,3 +150,27 @@ def test_host_allowlist_when_configured(tmp_path):
         assert (await c.get('/healthz')).status_code==200  # loopback host from the test client
         assert (await c.post('/api/meetings', json={}, headers={'Host':'allowed.example:1','Origin':'https://other.example'})).status_code==403
     run_test(tmp_path,test,{'MEETINGS_ALLOWED_HOSTS':'allowed.example:1'})
+
+
+def test_owner_name_is_off_by_default_and_comes_from_install(tmp_path):
+    async def test(s,c):
+        sent=[]
+        async def fake_llm(messages, **kw):
+            sent.append(messages[0]['content'])
+            return '# Fixture title\n## Action items\n- [ ] Owner — task'
+        s.llm=fake_llm
+        m=(await c.post('/api/meetings',json={'title':'Fixture'})).json()
+        assert (await c.put(f"/api/meetings/{m['id']}/notes",json={'notes':'Plan','base_rev':0})).status_code==200
+        os.environ.pop('MEETINGS_OWNER_NAME', None)
+        assert s.owner_identity_prompt()==''
+        await s.run_enhance(m['id'],'general')
+        assert sent[-1]==s.ENHANCE_SYSTEM.format(sections=', '.join(s.TEMPLATES['general']))
+        os.environ['MEETINGS_OWNER_NAME']='  Ada\nLovelace{} '
+        try:
+            assert s.owner_identity_prompt().startswith('\nThe recording owner is Ada Lovelace.')
+            await s.run_enhance(m['id'],'general')
+            assert sent[-1].endswith(s.owner_identity_prompt()) and "'Ada Lovelace' instead of 'Me'" in sent[-1]
+            assert '{' not in s.owner_identity_prompt()
+        finally:
+            os.environ.pop('MEETINGS_OWNER_NAME', None)
+    run_test(tmp_path,test)

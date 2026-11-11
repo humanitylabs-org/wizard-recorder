@@ -14,7 +14,12 @@ import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
-SWITCHES = []
+SWITCHES = [
+    {'id': 'live-screen', 'name': 'Live screen',
+     'description': 'Open the Recorder with its full screen: live words while you record, Ask cards, a live summary, '
+                    'playback, transcript and outline. Needs a live words key in the app settings.',
+     'default': False, 'issues': ['humanitylabs-org/wizard-recorder#1']},
+]
 CONTRACT = 'wizard.app-switches/1'
 _LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
 _lock = threading.Lock()

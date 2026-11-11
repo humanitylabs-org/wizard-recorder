@@ -28,7 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
 BASE = "/meetings"
@@ -893,8 +893,7 @@ async def _guard(request: Request, call_next):
     if path == BASE or path.startswith(BASE + "/"):
         request.scope["path"] = path[len(BASE):] or "/"
     host = request.headers.get("host", "").lower()
-    # Blank MEETINGS_ALLOWED_HOSTS trusts the owner-authenticated Wizard ingress; a list restricts to it.
-    if not host or (ALLOWED_HOSTS and host not in ALLOWED_HOSTS and host not in INTERNAL_HOSTS):
+    if not _host_ok(request.headers):
         return JSONResponse({"error": "host not allowed"}, status_code=403)
     if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("sec-fetch-site") == "cross-site":
         return JSONResponse({"error": "cross-site write not allowed"}, status_code=403)
@@ -916,6 +915,12 @@ async def _guard(request: Request, call_next):
 ALLOWED_ORIGINS = {o.strip() for o in os.environ.get("MEETINGS_ALLOWED_ORIGINS", "").split(",") if o.strip()}
 ALLOWED_HOSTS = {h.strip().lower() for h in os.environ.get("MEETINGS_ALLOWED_HOSTS", "").split(",") if h.strip()}
 INTERNAL_HOSTS = {"127.0.0.1:8080", "localhost:8080", "mizel:8080"}
+
+
+def _host_ok(headers) -> bool:
+    host = headers.get("host", "").lower()
+    # Blank MEETINGS_ALLOWED_HOSTS trusts the owner-authenticated Wizard ingress; a list restricts to it.
+    return bool(host) and not (ALLOWED_HOSTS and host not in ALLOWED_HOSTS and host not in INTERNAL_HOSTS)
 
 
 def _mid(mid: str) -> str:
@@ -1259,13 +1264,17 @@ async def delete_meeting(mid: str):
 
 from package_routes import install_routes
 install_routes(app)
-from wizard_switches import install_switches  # wizard.app-switches/1 (Tracker Try it)
+from wizard_switches import install_switches, switch_on  # wizard.app-switches/1 (Tracker Try it)
 install_switches(app, DATA)
+import live_screen  # noqa: E402  the live screen (issue #1), behind the off-by-default "live-screen" switch
+live_screen.install(app, data=DATA, switch_on=switch_on, host_ok=_host_ok, allowed_origins=ALLOWED_ORIGINS)
 
 
 @app.get("/")
 async def index(request: Request):
     raw = request.scope.get("raw_path", b"").decode()
+    if switch_on(live_screen.SWITCH):
+        return RedirectResponse("live/", status_code=302)  # relative: works under any ingress prefix; keeps #/m/<id>
     # The old Meetings view is retired: Mizel.ai has one view, Mizel Live (/mizel-live/). Its hash routes
     # (#/m/<id>) match, and the browser carries the hash across the redirect. This server stays the API.
     if not os.environ.get("MEETINGS_EXTERNAL_VIEW"):

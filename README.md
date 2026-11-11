@@ -41,3 +41,10 @@ Release images (linux/amd64 and linux/arm64) are built by the `Build, test and p
 ## License
 
 GPL-3.0-only. See `LICENSE`.
+
+## Live screen (switch, off by default)
+
+The full Recorder screen (live words while recording, Ask cards, live summary, playback, transcript and outline) is in
+`live/` and is served by this app at `/live/` when the owner turns on **Live screen** (`live-screen`) in the app's
+Try changes. It needs a live words key (`TINFOIL_API_KEY`) in the app settings; Ask cards also need the agent
+endpoint and key. See `live/README.md`.

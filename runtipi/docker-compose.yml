@@ -1,13 +1,13 @@
 services:
   mizel:
-    image: ghcr.io/humanitylabs-org/wizard-recorder:0.2.1
+    image: ghcr.io/humanitylabs-org/wizard-recorder:0.2.2
     restart: unless-stopped
     user: 1000:1000
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
     read_only: true
     pids_limit: 256
-    mem_limit: 512m
+    mem_limit: 768m
     tmpfs: [/tmp]
     environment:
       MEETINGS_DATA: /data
@@ -22,6 +22,14 @@ services:
       MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
       WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
       WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
+      # Live screen (switch "live-screen", off by default; issue #1). All optional; blank keeps it unconfigured.
+      TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
+      MIZEL_LIVE_REALTIME_MODEL: ${MIZEL_LIVE_REALTIME_MODEL:-voxtral-mini-4b-realtime}
+      MIZEL_LIVE_SUMMARY_MODEL: ${MIZEL_LIVE_SUMMARY_MODEL:-deepseek-v4-1-flash}
+      MIZEL_AGENT_NAME: ${MIZEL_AGENT_NAME:-}
+      WIZARD_API_URL: ${WIZARD_ORB_API_URL:-}
+      WIZARD_ORB_API_URL: ${WIZARD_ORB_API_URL:-}
+      WIZARD_AGENT_KEY: ${WIZARD_AGENT_KEY:-}
     volumes:
       - ${APP_DATA_DIR}/data:/data
     healthcheck:

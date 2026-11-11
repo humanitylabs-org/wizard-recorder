@@ -5,3 +5,4 @@
 !app/audio_playback.py
 !app/agent_delivery.py
 !openapi.json
+!app/wizard_switches.py

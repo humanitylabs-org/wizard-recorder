@@ -28,7 +28,7 @@ else:
     assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()==a.commit
     assert not subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()
 version=json.loads((root/'runtipi/config.json').read_text())['version']
-image='ghcr.io/humanitylabs-org/wizard-recorder:'+version
+image='ghcr.io/humanitylabs-org/wizard-recorder-app:'+version
 docker=['docker','--context',a.context]
 commands=[]
 for arch in ['amd64','arm64']:
@@ -37,7 +37,7 @@ if a.dry_run:
     print(json.dumps({'source':a.commit,'image':image,'commands':commands,'output':str(a.output),'architectures':['amd64','arm64']},indent=2));sys.exit(0)
 if a.push_ghcr:
     registry='ghcr.io'
-    repository='humanitylabs-org/wizard-recorder'
+    repository='humanitylabs-org/wizard-recorder-app'
     token_request=urllib.request.Request('https://'+registry+'/token?service='+registry+'&scope=repository:'+repository+':pull,push')
     # Anonymous tokens are refused (403) until the package exists, so a first publish must authenticate.
     if os.environ.get('GH_TOKEN'):token_request.add_header('Authorization','Basic '+__import__('base64').b64encode((os.environ.get('GITHUB_ACTOR','x')+':'+os.environ['GH_TOKEN']).encode()).decode())
@@ -77,12 +77,12 @@ for arch,command in zip(['amd64','arm64'],commands):
     receipt['architectures'][arch]={'asset':asset,'sha256':digest,'bytes':target.stat().st_size,'image':image,'image_id':inspect['Id']}
     (a.output/'build-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     if a.push_ghcr:
-        arch_tag='ghcr.io/humanitylabs-org/wizard-recorder:sha-'+a.commit+'-'+arch
+        arch_tag='ghcr.io/humanitylabs-org/wizard-recorder-app:sha-'+a.commit+'-'+arch
         subprocess.run([*docker,'tag',image,arch_tag],check=True)
         subprocess.run([*docker,'push',arch_tag],check=True)
 (a.output/'SHA256SUMS').write_text(''.join(v['sha256']+'  '+v['asset']+'\n' for v in receipt['architectures'].values()))
 if a.push_ghcr:
-    immutable='ghcr.io/humanitylabs-org/wizard-recorder:sha-'+a.commit
+    immutable='ghcr.io/humanitylabs-org/wizard-recorder-app:sha-'+a.commit
     tags=['-t',immutable]
     if a.release_version:
         assert os.environ.get('GITHUB_REF')=='refs/tags/v'+version

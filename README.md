@@ -33,8 +33,8 @@ Plain notes and transcripts work without a notes model. Optional notes enhanceme
     python3 scripts/check_release.py
     python3 -m pip install -r app/requirements.txt pytest
     python3 -m pytest tests -q
-    docker build -t ghcr.io/humanitylabs-org/wizard-recorder:0.2.0 .
-    python3 tests/smoke_container.py --image ghcr.io/humanitylabs-org/wizard-recorder:0.2.0 --context default
+    docker build -t ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.0 .
+    python3 tests/smoke_container.py --image ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.0 --context default
 
 Release images (linux/amd64 and linux/arm64) are built by the `Build, test and publish image` workflow. Private data never belongs in git or an image.
 

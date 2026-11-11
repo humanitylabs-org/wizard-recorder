@@ -174,3 +174,15 @@ def test_owner_name_is_off_by_default_and_comes_from_install(tmp_path):
         finally:
             os.environ.pop('MEETINGS_OWNER_NAME', None)
     run_test(tmp_path,test)
+
+
+def test_image_package_name_is_one_name_everywhere():
+    # The old ghcr.io/humanitylabs-org/wizard-recorder package is held outside this repo's Actions
+    # access (write_package denied), so every publish and install path uses the -app package.
+    root = Path(__file__).resolve().parents[1]
+    old = 'ghcr.io/humanitylabs-org/wizard-recorder'
+    for name in ('runtipi/docker-compose.yml', 'scripts/release_images.py', 'scripts/check_release.py'):
+        text = (root / name).read_text()
+        assert 'ghcr.io/humanitylabs-org/wizard-recorder-app' in text, name
+        assert old + ':' not in text and old + "'" not in text, name
+    assert "repository='humanitylabs-org/wizard-recorder-app'" in (root / 'scripts/release_images.py').read_text()

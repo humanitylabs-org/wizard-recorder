@@ -16,7 +16,7 @@ assert not re.search(r'^shares:', manifest, re.M)
 assert 'version: '+version+'\n' in manifest
 assert 'source: https://github.com/humanitylabs-org/wizard-recorder\n' in manifest
 assert config['source'] == 'https://github.com/humanitylabs-org/wizard-recorder'
-assert 'ghcr.io/humanitylabs-org/wizard-recorder:'+version+'\n' in compose
+assert 'ghcr.io/humanitylabs-org/wizard-recorder-app:'+version+'\n' in compose
 assert json.loads((root/'openapi.json').read_text())['info']['version'] == version
 module = ast.parse((root/'app/server.py').read_text())
 assert any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'VERSION' for t in n.targets)

@@ -10,8 +10,8 @@
     "utilities"
   ],
   "description": "Empty-by-default recorder backend with notes, native capture, audio upload, HTTP API, MCP and shared transcription.",
-  "tipi_version": 1,
-  "version": "0.2.0",
+  "tipi_version": 2,
+  "version": "0.2.1",
   "source": "https://github.com/humanitylabs-org/wizard-recorder",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1791850000000,
-  "updated_at": 1791850000000,
+  "updated_at": 1794361620260,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

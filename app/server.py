@@ -28,7 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
 BASE = "/meetings"
@@ -1259,6 +1259,8 @@ async def delete_meeting(mid: str):
 
 from package_routes import install_routes
 install_routes(app)
+from wizard_switches import install_switches  # wizard.app-switches/1 (Tracker Try it)
+install_switches(app, DATA)
 
 
 @app.get("/")

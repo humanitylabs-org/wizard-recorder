@@ -239,10 +239,10 @@ def test_entry_hands_root_owned_data_to_uid_1000_then_serves_as_1000():
     # server (uid 1000, no capabilities) could not chmod it. start.py prepares /data as root and drops privileges.
     root = Path(__file__).resolve().parents[1]
     entry = (root / 'start.py').read_text()
-    assert 'os.setuid(UID)' in entry and 'os.lchown' in entry and "'--port', '8080'" in entry
+    assert 'os.setuid(UID)' in entry and 'os.chown' in entry and "'--port', '8080'" in entry
     compose = (root / 'runtipi/docker-compose.yml').read_text()
     assert 'user: 0:0' in compose and 'cap_drop: [ALL]' in compose
-    assert 'cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]' in compose and 'no-new-privileges:true' in compose
+    assert 'cap_add: [CHOWN, SETUID, SETGID]' in compose and 'no-new-privileges:true' in compose
     dockerfile = (root / 'Dockerfile').read_text()
     assert 'COPY start.py /app/start.py' in dockerfile and 'CMD ["python", "/app/start.py"]' in dockerfile
     assert '!start.py' in (root / '.dockerignore').read_text()

@@ -25,7 +25,7 @@ try:
     # A new daemon volume (and a Docker-created bind-mount folder) is root-owned. Started as Runtipi starts it, the entry
     # must give only /data to uid 1000 and drop root before serving.
     run('run', '-d', '--name', name, '--read-only', '--tmpfs', '/tmp', '--cap-drop', 'ALL', '--user', '0:0',
-        '--cap-add', 'CHOWN', '--cap-add', 'DAC_READ_SEARCH', '--cap-add', 'SETUID', '--cap-add', 'SETGID',
+        '--cap-add', 'CHOWN', '--cap-add', 'SETUID', '--cap-add', 'SETGID',
         '--security-opt', 'no-new-privileges:true', '--memory', '512m',
         '-e', 'TRANSCRIPTION_URL=http://127.0.0.1:9/unused', '-p', '127.0.0.1::8080', '-v', volume+':/data', a.image)
     base = 'http://'+run('port', name, '8080/tcp').splitlines()[0]

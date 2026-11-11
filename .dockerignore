@@ -6,3 +6,13 @@
 !app/agent_delivery.py
 !openapi.json
 !app/wizard_switches.py
+!app/live_screen.py
+!live/package.json
+!live/package-lock.json
+!live/server.mjs
+!live/provider.js
+!live/agent-router.mjs
+!live/orb-authority.mjs
+!live/orb-events.mjs
+!live/owner-identity.mjs
+!live/web

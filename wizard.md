@@ -8,7 +8,7 @@ voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, productivity]
 privacy: private
 # Private app: recordings and transcripts are not readable by public agents.
-version: 0.2.1
+version: 0.2.2
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
@@ -46,4 +46,4 @@ switches:
 
 Record meetings from your device, upload audio, keep notes and search transcripts. This package is the recorder backend: HTTP API, MCP tools, storage and the transcription queue. The shared transcription provider does the speech recognition; this app contains no model. It starts empty and keeps SQLite, audio and notes in its own app-data volume. Uninstall preserves that volume.
 
-Capture uses the existing Wizard recorder bridge on the owner's device. This package does not ship its own browser recording screen: opening its address returns a short JSON pointer to `/api` and `/mcp`. Optional OpenAI-compatible notes enhancement uses owner-supplied configuration only. Finished recaps go to the agent this app routes through (chosen in Wizard, the main agent by default) through the Wizard delivery endpoint; the app never names an agent, and a bound agent that is down keeps recaps queued (`GET /api/agent-delivery`).
+Capture uses the existing Wizard recorder bridge on the owner's device. The full Recorder screen (live words, Ask cards, live summary, playback, transcript and outline; `live/`) is served by this app behind the switch **Live screen** (`live-screen`, off by default) and needs a live words key in the app settings. With the switch off, opening its address returns a short JSON pointer to `/api` and `/mcp`. Optional OpenAI-compatible notes enhancement uses owner-supplied configuration only. Finished recaps go to the agent this app routes through (chosen in Wizard, the main agent by default) through the Wizard delivery endpoint; the app never names an agent, and a bound agent that is down keeps recaps queued (`GET /api/agent-delivery`).

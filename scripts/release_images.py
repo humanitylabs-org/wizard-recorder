@@ -45,13 +45,26 @@ if a.push_ghcr:
         read_token=json.load(response)['token']
     tags=['sha-'+a.commit]+['sha-'+a.commit+'-'+arch for arch in ['amd64','arm64']]
     if a.release_version:tags.append(version)
-    for tag in tags:
+    def exists(tag):
         request=urllib.request.Request('https://'+registry+'/v2/'+repository+'/manifests/'+tag,method='HEAD',headers={'Authorization':'Bearer '+read_token,'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json'})
         try:
-            with urllib.request.urlopen(request) as response:raise SystemExit('Refusing existing immutable image tag '+tag)
+            with urllib.request.urlopen(request):return True
         except urllib.error.HTTPError as error:
             # GHCR answers 403 (not 404) for a package that does not exist yet; docker push then creates it.
             if error.code not in (403,404):raise
+            return False
+    present={tag:exists(tag) for tag in tags}
+    # A main push already published the immutable sha-<commit> images, built and smoke-tested from this exact commit.
+    # A v* release of that commit must reuse them (never rebuild or overwrite) and only add the version tag.
+    retag_only=bool(a.release_version) and all(present[t] for t in tags if t!=version)
+    if retag_only:
+        assert not present.get(version),'Refusing existing immutable version tag '+version
+        assert os.environ.get('GITHUB_REF')=='refs/tags/v'+version
+        subprocess.run([*docker,'buildx','imagetools','create','-t',image,'ghcr.io/humanitylabs-org/wizard-recorder-app:sha-'+a.commit],check=True)
+        print(json.dumps({'commit':a.commit,'version':version,'image':image,'retagged_from':'sha-'+a.commit},indent=2))
+        sys.exit(0)
+    for tag in tags:
+        if present[tag]:raise SystemExit('Refusing existing immutable image tag '+tag)
     if a.release_version:assert os.environ.get('GITHUB_REF')=='refs/tags/v'+version
 a.output.mkdir(parents=True,exist_ok=True)
 receipt={'commit':a.commit,'version':version,'image':image,'architectures':{}}

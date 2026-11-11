@@ -186,3 +186,49 @@ def test_image_package_name_is_one_name_everywhere():
         assert 'ghcr.io/humanitylabs-org/wizard-recorder-app' in text, name
         assert old + ':' not in text and old + "'" not in text, name
     assert "repository='humanitylabs-org/wizard-recorder-app'" in (root / 'scripts/release_images.py').read_text()
+
+
+def test_release_of_an_already_published_commit_only_adds_the_version_tag(tmp_path, monkeypatch):
+    # A main push publishes sha-<commit>; the v* release of the same commit used to die on
+    # "Refusing existing immutable image tag". It must reuse those images and only retag the version.
+    import json, runpy, subprocess, urllib.error, urllib.request
+    root = Path(__file__).resolve().parents[1]
+    commit = 'a' * 40
+    version = json.loads((root / 'runtipi/config.json').read_text())['version']
+    stamp = root / '.source-commit'
+    stamp.write_text(commit)
+    published = {'sha-' + commit, 'sha-' + commit + '-amd64', 'sha-' + commit + '-arm64'}
+    calls = []
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"token": "t"}'
+
+    def urlopen(request, *a, **k):
+        url = request.full_url if hasattr(request, 'full_url') else request
+        if '/token' in url:
+            return Resp()
+        tag = url.rsplit('/manifests/', 1)[1]
+        if tag in published:
+            return Resp()
+        raise urllib.error.HTTPError(url, 404, 'nf', {}, None)
+
+    def run(cmd, *a, **k):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(subprocess, 'run', run)
+    monkeypatch.setenv('GITHUB_REF', 'refs/tags/v' + version)
+    monkeypatch.setattr('sys.argv', ['release_images.py', '--commit', commit, '--output', str(tmp_path), '--push-ghcr', '--release-version', '--context', 'default', '--builder', 'default'])
+    try:
+        with pytest.raises(SystemExit) as done:
+            runpy.run_path(str(root / 'scripts/release_images.py'), run_name='__main__')
+    finally:
+        stamp.unlink()
+    assert done.value.code == 0
+    assert len(calls) == 1 and 'imagetools' in calls[0] and 'create' in calls[0]
+    assert 'ghcr.io/humanitylabs-org/wizard-recorder-app:' + version in calls[0]
+    assert 'ghcr.io/humanitylabs-org/wizard-recorder-app:sha-' + commit in calls[0]
+    assert not any('build' in c for c in calls)

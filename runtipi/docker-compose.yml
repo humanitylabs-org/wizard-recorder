@@ -1,9 +1,11 @@
 services:
   mizel:
-    image: ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.2
+    image: ghcr.io/humanitylabs-org/wizard-recorder-app:0.2.3
     restart: unless-stopped
-    user: 1000:1000
+    # Starts as root only to give the bind-mounted data folder to uid 1000, then start.py drops to 1000 (CapEff 0).
+    user: 0:0
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]
     security_opt: ['no-new-privileges:true']
     read_only: true
     pids_limit: 256

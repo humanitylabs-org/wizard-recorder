@@ -1,5 +1,6 @@
 *
 !app/requirements.txt
+!start.py
 !app/server.py
 !app/package_routes.py
 !app/audio_playback.py

@@ -8,7 +8,7 @@ voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, productivity]
 privacy: private
 # Private app: recordings and transcripts are not readable by public agents.
-version: 0.2.0
+version: 0.2.1
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
@@ -37,6 +37,9 @@ agent_binding:
   required: false
   purpose: Where your meeting recaps go
 health: /healthz
+switches:
+  contract: wizard.app-switches/1
+  path: /api/switches
 ---
 
 # Mizel.ai Recorder

@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
  && useradd --uid 1000 --create-home recorder && mkdir -p /data && chown 1000:1000 /data
 COPY app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
-COPY app/server.py app/package_routes.py app/audio_playback.py app/agent_delivery.py openapi.json /app/
+COPY app/server.py app/package_routes.py app/wizard_switches.py app/audio_playback.py app/agent_delivery.py openapi.json /app/
 RUN chmod -R a+rX,go-w /app
 USER 1000:1000
 WORKDIR /app

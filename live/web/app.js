@@ -124,7 +124,7 @@ const fmtDateLong = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'lo
 const fmtDateShort = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 const relTime = (iso) => { const d = new Date(iso); return startOfDay(d) - startOfDay(new Date()) === 0 ? fmtTime(iso) : `${dayLabel(iso)} ${fmtTime(iso)}`; };
 const pluralize = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const SOURCE_LABEL = { mizel: 'Mizel recorder', anarlog: 'Anarlog', meetings: 'Recorded here' };
+const SOURCE_LABEL = { mizel: 'Recorder', anarlog: 'Anarlog', meetings: 'Recorded here' };
 const TEMPLATES = [['general', 'General'], ['one_on_one', '1:1'], ['sales', 'Sales']];
 const supportsPlaintextOnly = (() => { const d = document.createElement('div'); d.contentEditable = 'plaintext-only'; return d.contentEditable === 'plaintext-only'; })();
 const initials = (s) => { const t = String(s || '').split('@')[0].split(/[\s._-]+/).filter(Boolean); return ((t[0]?.[0] || '') + (t[1]?.[0] || '')).toUpperCase() || '?'; };
@@ -763,7 +763,7 @@ function renderEnhanced(m) {
   const nCites = (m.enhanced.evidence || []).length;
   const tpl = TEMPLATES.find(([k]) => k === m.enhanced.template)?.[1] || 'General';
   replace(box,
-    hasYours && h('div', { class: 'legend' }, h('span', { class: 'k-yours' }, h('i'), 'Your notes'), h('span', { class: 'k-ai' }, h('i'), 'Added by Mizel')),
+    hasYours && h('div', { class: 'legend' }, h('span', { class: 'k-yours' }, h('i'), 'Your notes'), h('span', { class: 'k-ai' }, h('i'), 'Added by Recorder')),
     h('div', { class: 'w-prose md marks', html: md(src, { marks: true, evidence: true, shift: 1 }) }),
     h('div', { class: 'enh-foot' }, icon('spark'), 'Summary', m.enhanced.created_at && `· ${relTime(m.enhanced.created_at)}`, nCites ? `· ${pluralize(nCites, 'source')} — hover a number to preview, click to jump` : null), discussionSection(m.id));
 }
@@ -1286,7 +1286,7 @@ async function verifyCaptureReadback(meetingId, take, finalSeq) {
 
 // ───────────────────────── 9. Recording controller + floating recorder ─────────────────────────
 function recElapsed() { return state.rec?.engine?.elapsedMs || 0; }
-// Mizel transcripts carry no speaker labels, so the Wizard bridge reads a spoken opener ("Call with Jan and
+// Recorder transcripts carry no speaker labels, so the Wizard bridge reads a spoken opener ("Call with Jan and
 // Miguel") as the participant list. A brand-new recording gets one quiet, self-dismissing nudge to say it.
 const PARTICIPANTS_HINT = 'In a meeting? Start by saying who\u2019s here, like \u201cCall with Jan and Miguel.\u201d';
 const PARTICIPANTS_HINT_MS = 5000;
@@ -1435,7 +1435,7 @@ async function reattachShared(failed = null) {
     failed?.engine?.detach?.();
     const cbs={onLevel:updateLevel,onQueue:renderPillQueue,onState:renderPill,onWarn:msg=>toast(msg,{error:true}),onLive:(samples,at)=>live.audio(samples,at),onNative:onNativeState};
     const engine=new SharedMeeting(id,cbs,{captureId:take.id});
-    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Mizel capture or durable task save');startPillClock();
+    const r=adopted={meetingId:id,title:'',engine,phase:'starting',paused:false,error:null};state.rec=r;recordingUpdateHold ||= WizardApp.update.hold('Recorder capture or durable task save');startPillClock();
     if(current || take.meta?.captureRecovery?.resumable) {
       await engine.start({systemAudio:false});if(state.rec!==r)return;r.phase='recording';r.paused=!!engine.info.paused;
       if(engine.info.phase==='error'||engine.info.inputStopped){state.rec.phase='error';await stopRecording();return;}
@@ -1526,7 +1526,7 @@ function endRecSession() { state.rec?.engine?.detach?.(); clearTimeout(state.rec
 
 let pillClock = 0;
 let recordingUpdateHold = null;
-function startPillClock() { if (!recordingUpdateHold) recordingUpdateHold = WizardApp.update.hold('Mizel recording'); stopPillClock(); pillClock = setInterval(() => { tickPillClock(); renderRecBanner(); }, 500); }
+function startPillClock() { if (!recordingUpdateHold) recordingUpdateHold = WizardApp.update.hold('Recorder recording'); stopPillClock(); pillClock = setInterval(() => { tickPillClock(); renderRecBanner(); }, 500); }
 function stopPillClock() { clearInterval(pillClock); pillClock = 0; }
 function tickPillClock() { const c = $('.clock', els.pill); if (c && state.rec) c.textContent = fmtClock(recElapsed()); }
 const BAR_SHAPE = [0.5, 0.8, 1, 0.75, 0.45];
@@ -1831,7 +1831,7 @@ async function renderRoute(m) {
     row = routeRow({ glyph: glyphFor(r.route), tone: 'is-warn', title: ['Couldn’t reach ', h('b', { text: name })], sub: 'Tap to try again', onclick: () => openRouteSheet(m) });
   } else {
     const finished = m.status === 'ready';
-    const sub = r.route === 'none' ? 'This recording stays in Mizel'
+    const sub = r.route === 'none' ? 'This recording stays in Recorder'
       : !r.eligible ? 'Recorded before auto-send · Tap to send'
       : finished ? (r.due ? 'Sending now…' : 'Sends when the summary is ready')
       : r.isDefault ? 'Default · sends when you stop' : 'Just this recording';
@@ -1845,7 +1845,7 @@ async function openRouteSheet(m) {
   try { [r, list] = await Promise.all([loadRoute(m.id), wizardAgents()]); } catch (e) { toast(errMsg(e), { error: true }); return; }
   let choice = r.route;
   const error = h('p', { class: 'rs-err', role: 'status' });
-  const opts = [...list, { id: 'none', label: 'Don’t send', note: 'Keep this recording in Mizel only' }];
+  const opts = [...list, { id: 'none', label: 'Don’t send', note: 'Keep this recording in Recorder only' }];
   const finished = m.status === 'ready';
   const canSendNow = () => finished && choice !== 'none' && (!r.sent || r.sent.agent !== choice);
   const body = h('div', { class: 'rs-list', role: 'radiogroup', 'aria-label': 'Send this recording to' });
@@ -1889,7 +1889,7 @@ async function openRouteSheet(m) {
     body, error, foot));
 }
 
-// Sending. Standard agents are sent by the Mizel server; the private agent only accepts the owner's own
+// Sending. Standard agents are sent by the Recorder server; the private agent only accepts the owner's own
 // device, so this client sends it through Wizard (same path as Chats).
 async function wizardCall(path, agent, json, headers = {}) {
   const r = await fetch(`/wizard/hermes${path}?agent=${encodeURIComponent(agent)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers }, body: JSON.stringify({ ...json, agent }) });
@@ -1925,7 +1925,7 @@ async function pumpDeliveries() {
     const { due = [] } = await api('deliveries/due');
     for (const d of due) {
       try { await deviceDeliver(d.meetingId, d.agent); routeCache.delete(d.meetingId); }
-      catch (e) { if (e?.status !== 409) console.warn('Mizel delivery failed', d.meetingId, errMsg(e)); }
+      catch (e) { if (e?.status !== 409) console.warn('Recorder delivery failed', d.meetingId, errMsg(e)); }
       if (state.current?.id === d.meetingId) void renderRoute(state.current);
     }
   } catch { /* offline: next tick */ }
@@ -2143,8 +2143,8 @@ function appBack() {
   if (state.route.view !== 'home') { goBack(); return true; }
   return false;
 }
-WizardApp.ready({ name: 'Mizel', version: '1' });
-// Wizard's agent orb becomes Mizel's New recording button on the list (two-orb layout); our own button then hides.
+WizardApp.ready({ name: 'Recorder', version: '1' });
+// Wizard's agent orb becomes Recorder's New recording button on the list (two-orb layout); our own button then hides.
 var orbClaimed = null;
 function syncAppOrb() {
   if (!WizardApp.orb) return;
@@ -2164,7 +2164,7 @@ window.wizardAppBack = () => { appBack(); return true; };
 let notesUpdateHold = null;
 function syncNotesUpdateHold() {
   const busy = state.notes.dirty || state.notes.saving || !!state.notes.conflict;
-  if (busy && !notesUpdateHold) notesUpdateHold = WizardApp.update.hold('Mizel unsaved notes');
+  if (busy && !notesUpdateHold) notesUpdateHold = WizardApp.update.hold('Recorder unsaved notes');
   if (!busy && notesUpdateHold) { notesUpdateHold.release(); notesUpdateHold = null; }
 }
 
@@ -2249,7 +2249,7 @@ function boot() {
 }
 boot();
 
-// Self-update: when a newer Mizel ships, reload on return to the app, never mid-recording or with a sheet open.
+// Self-update: when a newer Recorder ships, reload on return to the app, never mid-recording or with a sheet open.
 let loadedBuild = null;
 async function checkForUpdate() {
   try {

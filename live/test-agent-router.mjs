@@ -41,7 +41,7 @@ test('packet: note first, memory, notes, timestamped transcript', () => {
   assert.match(p.text, /# Standup/);
   assert.match(p.text, /- Build router \[01:05\]/);
   assert.match(p.text, /## Notes\n\nShip router/);
-  assert.match(p.text, /## Summary \(Mizel\)\n\n- Decided X/);
+  assert.match(p.text, /## Summary \(Recorder\)\n\n- Decided X/);
   assert.match(p.text, /\[00:00\] Hello\n\[01:05\] Next item/);
   assert.equal(p.segments, 2);
   assert.equal(p.truncated, false);
@@ -54,7 +54,7 @@ test('packet: default instruction names the agent when no note', () => {
 });
 
 test('title and stamp', () => {
-  assert.equal(threadTitle('Standup', 'Quick'), 'Mizel · Standup → Quick');
+  assert.equal(threadTitle('Standup', 'Quick'), 'Recorder · Standup → Quick');
   assert.ok(threadTitle('x'.repeat(200), 'Quick').length <= 90);
   assert.equal(stamp(3_725_000), '1:02:05');
 });

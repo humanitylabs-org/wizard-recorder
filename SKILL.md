@@ -3,7 +3,7 @@ name: mizel
 description: Use when recording meetings or searching their notes and transcripts.
 ---
 
-# Mizel.ai Recorder
+# Recorder
 
 Call the installed app through Wizard's MCP gateway; discover its prefix with tools/list.
 

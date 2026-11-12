@@ -1,4 +1,4 @@
-"""Mizel.ai recorder: live recorder behavior with portable storage and MCP.
+"""Recorder (formerly Mizel.ai): live recorder behavior with portable storage and MCP.
 
 Owner integrations are explicit environment configuration. Fresh installs are empty.
 Derived from live recorder e4c46d1 + cf610d3; native chunk/stop contracts retained.
@@ -28,7 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
 BASE = "/meetings"
@@ -1275,10 +1275,10 @@ async def index(request: Request):
     raw = request.scope.get("raw_path", b"").decode()
     if switch_on(live_screen.SWITCH):
         return RedirectResponse("live/", status_code=302)  # relative: works under any ingress prefix; keeps #/m/<id>
-    # The old Meetings view is retired: Mizel.ai has one view, Mizel Live (/mizel-live/). Its hash routes
+    # The old Meetings view is retired: Recorder has one view, Recorder Live (/mizel-live/). Its hash routes
     # (#/m/<id>) match, and the browser carries the hash across the redirect. This server stays the API.
     if not os.environ.get("MEETINGS_EXTERNAL_VIEW"):
-        return JSONResponse({"app":"mizel", "api":"/api", "mcp":"/mcp", "view":"Use the installed Mizel Live view or native recorder."})
+        return JSONResponse({"app":"mizel", "api":"/api", "mcp":"/mcp", "view":"Use the installed Recorder Live view or native recorder."})
     return RedirectResponse(os.environ["MEETINGS_EXTERNAL_VIEW"], status_code=302)
 
 

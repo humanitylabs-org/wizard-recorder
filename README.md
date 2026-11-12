@@ -1,12 +1,12 @@
-# Mizel.ai Recorder
+# Recorder
 
-Official Wizard OS app (id `mizel`). A recorder backend that starts empty: meetings, notes, audio upload, searchable transcripts, an HTTP API and MCP tools. No recordings, transcripts, calendars, credentials or model weights are included; speech recognition comes from the shared transcription provider.
+Official Wizard OS app (id `mizel`; formerly Mizel.ai). A recorder backend that starts empty: meetings, notes, audio upload, searchable transcripts, an HTTP API and MCP tools. No recordings, transcripts, calendars, credentials or model weights are included; speech recognition comes from the shared transcription provider.
 
 `privacy: private` in `wizard.md` is a runtime promise: this app's recordings and transcripts are not readable by public agents.
 
 ## Install
 
-Install **Mizel.ai** from the Wizard Store, or with the App Manager:
+Install **Recorder** from the Wizard Store, or with the App Manager:
 
     wam install humanitylabs-org/wizard-recorder
 
@@ -16,7 +16,7 @@ Every install setting is optional. Defaults point at the shared Transcriber app 
 
 Recording starts from the Wizard recorder on your device; write notes during or after recording. Upload audio files through `POST /api/uploads`. The server accepts raw uploads up to 100 MiB and six hours, then decodes them into 30-second WAV chunks before using the same shared-transcription queue. Transcripts are searchable and exportable as Markdown; audio remains playable.
 
-Plain notes and transcripts work without a notes model. Optional notes enhancement/Ask uses owner-configured MEETINGS_LLM_URL, MEETINGS_LLM_MODEL and MEETINGS_LLM_KEY. Missing configuration returns an explicit 503 rather than pretending that a model ran. Calendar, Mizel imports and Anarlog imports are intentionally empty in this portable package; the original host service stays unchanged.
+Plain notes and transcripts work without a notes model. Optional notes enhancement/Ask uses owner-configured MEETINGS_LLM_URL, MEETINGS_LLM_MODEL and MEETINGS_LLM_KEY. Missing configuration returns an explicit 503 rather than pretending that a model ran. Calendar, legacy Mizel.ai imports and Anarlog imports are intentionally empty in this portable package; the original host service stays unchanged.
 
 ## Interfaces and storage
 

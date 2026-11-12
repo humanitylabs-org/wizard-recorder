@@ -21,7 +21,7 @@ import wizard_switches  # noqa: E402
 
 KEY = bytes(range(32))
 APP = 'wizard-recorder'
-FORGED = {'X-Wizard-Switch': '1', 'Host': 'box.tail1234.ts.net', 'Origin': 'https://box.tail1234.ts.net',
+FORGED = {'X-Wizard-Switch': '1', 'Host': 'wizard.example.com', 'Origin': 'https://wizard.example.com',
           'Tailscale-User-Login': 'owner@example.com'}
 ENV = ('WIZARD_OWNER_PROOF_KEY_FILE', 'WIZARD_OWNER_PROOF_APP', 'WIZARD_OWNER_LOGINS', 'WIZARD_TRUSTED_ORIGINS')
 

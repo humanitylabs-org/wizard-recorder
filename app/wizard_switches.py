@@ -6,11 +6,16 @@ behind a switch, off by default: append it to SWITCHES with the issue it deliver
    'issues': ['humanitylabs-org/<repo>#20']}
 and gate the feature on switch_on('compact-header'). State lives on the box (<data dir>/switches.json). GET/POST
 /api/switches, owner only: the box's Tailscale Serve owner login with X-Wizard-Switch: 1; never a bearer, agent grant or
-box-local host. Wire it with install_switches(app, data_dir).
+box-local host. An app with a platform owner-proof key (owner_proof in wizard.md, wizard-os spec/OWNER_PROOF.md) accepts
+only a valid signed proof: any process on the box can set the other headers. Wire it with install_switches(app, data_dir).
 """
+import hashlib
+import hmac
 import json
 import os
+import re
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -24,6 +29,8 @@ CONTRACT = 'wizard.app-switches/1'
 _LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
 _lock = threading.Lock()
 _dir = {'path': None}
+_nonces = {}
+_PROOF = re.compile(r'(\d{1,12})\.([0-9a-f]{48})\.([0-9a-f]{64})')
 
 
 def _file():
@@ -61,9 +68,47 @@ def _set(switch_id, on):
     return switches_doc()
 
 
-def _owner(h, write):
+def _target(scope):
+    """The request target as the app received it (raw path plus query), which the owner proof is bound to."""
+    raw = scope.get('raw_path') or scope.get('path', '').encode()
+    q = scope.get('query_string') or b''
+    return (raw + (b'?' + q if q else b'')).decode('latin-1')
+
+
+def _proof(h, method, target):
+    """None when this app has no platform owner-proof key, else whether the request carries a valid, unused proof."""
+    key_file = os.environ.get('WIZARD_OWNER_PROOF_KEY_FILE')
+    if not key_file:
+        return None
+    try:
+        with open(key_file, 'rb') as f:
+            key = f.read(33)
+    except OSError:
+        return False                    # a key is named but unreadable: refuse, never fall back to headers
+    app = os.environ.get('WIZARD_OWNER_PROOF_APP') or ''
+    values = h.getlist('x-wizard-app-owner-proof') if hasattr(h, 'getlist') else [h.get('x-wizard-app-owner-proof') or '']
+    m = _PROOF.fullmatch(values[0].strip()) if len(values) == 1 else None
+    if len(key) != 32 or not app or not m or abs(time.time() - int(m.group(1))) > 30:
+        return False
+    msg = '\n'.join(('wizard-app-owner-v1', app, m.group(1), m.group(2), method, target)).encode()
+    if not hmac.compare_digest(hmac.new(key, msg, hashlib.sha256).hexdigest(), m.group(3)):
+        return False
+    now = time.monotonic()
+    with _lock:
+        for n in [n for n, until in _nonces.items() if until < now]:
+            del _nonces[n]
+        if m.group(2) in _nonces:
+            return False
+        _nonces[m.group(2)] = now + 61
+    return True
+
+
+def _owner(h, write, method='GET', target=''):
     if h.get('authorization') or h.get('x-wizard-switch') != '1':
         return False
+    proof = _proof(h, method, target)
+    if proof is not None:
+        return proof
     if (h.get('sec-fetch-site') or 'same-origin').lower() not in ('same-origin', 'none'):
         return False
     host = (h.get('host') or '').strip().lower()
@@ -90,13 +135,13 @@ def install_switches(app, data_dir=None, path='/api/switches'):
 
     @app.get(path, include_in_schema=False)
     async def wizard_switches_get(request: Request):
-        if not _owner(request.headers, False):
+        if not _owner(request.headers, False, request.method, _target(request.scope)):
             return JSONResponse({'error': "Only this Wizard's owner can see these switches.", 'code': 'owner_only'}, 403, nocache)
         return JSONResponse(switches_doc(), 200, nocache)
 
     @app.post(path, include_in_schema=False)
     async def wizard_switches_post(request: Request):
-        if not _owner(request.headers, True):
+        if not _owner(request.headers, True, request.method, _target(request.scope)):
             return JSONResponse({'error': "Only this Wizard's owner can change these switches.", 'code': 'owner_only'}, 403, nocache)
         try:
             if (request.headers.get('content-type') or '').split(';')[0].strip() != 'application/json':

@@ -1,14 +1,14 @@
 ---
 wizard: 0.2
 id: mizel
-name: Mizel.ai
+name: Recorder
 type: service
 category: app
 voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, productivity]
 privacy: private
 # Private app: recordings and transcripts are not readable by public agents.
-version: 0.2.4
+version: 0.2.5
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
@@ -42,7 +42,7 @@ switches:
   path: /api/switches
 ---
 
-# Mizel.ai Recorder
+# Recorder
 
 Record meetings from your device, upload audio, keep notes and search transcripts. This package is the recorder backend: HTTP API, MCP tools, storage and the transcription queue. The shared transcription provider does the speech recognition; this app contains no model. It starts empty and keeps SQLite, audio and notes in its own app-data volume. Uninstall preserves that volume.
 

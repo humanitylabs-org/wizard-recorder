@@ -11,7 +11,7 @@ version = config['version']
 manifest = (root/'wizard.md').read_text()
 compose = (root/'runtipi/docker-compose.yml').read_text()
 assert config['id'] == 'mizel' and 'id: mizel\n' in manifest
-assert 'name: Mizel.ai\n' in manifest and 'privacy: private\n' in manifest
+assert 'name: Recorder\n' in manifest and 'privacy: private\n' in manifest
 assert not re.search(r'^shares:', manifest, re.M)
 assert 'version: '+version+'\n' in manifest
 assert 'source: https://github.com/humanitylabs-org/wizard-recorder\n' in manifest

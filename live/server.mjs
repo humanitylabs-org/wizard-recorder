@@ -1,5 +1,5 @@
 import { ownerIdentityPrompt, noAttributionPrompt } from './owner-identity.mjs';
-// Mizel private live transcription and summaries; explicit manual Wizard requests only.
+// Recorder private live transcription and summaries; explicit manual Wizard requests only.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -94,7 +94,7 @@ const publicAsk = (a) => ({ id: a.id, meetingId: a.meetingId, title: a.title || 
   threadId: a.threadId || null, agent: a.agent || MAIN_AGENT, agentLabel: a.agentLabel || MAIN_AGENT_NAME, createdAt: a.createdAt, latency: a.latency || null, endedBy: a.endedBy || null, dismissed: !!a.dismissed });
 
 
-// ───────────── Live summary: append-only topics + bullets, as in the Mizel.ai app ─────────────
+// ───────────── Live summary: append-only topics + bullets, as in the Recorder app ─────────────
 // Built from the accurate (~30 s window) transcript, not the grey live words. Anything said to
 // The agent is left out: it has its own cards and "Asked <agent>" list.
 const SUMMARY_PROMPT = 'You maintain an append-only live summary of a meeting or spoken ramble. Return only JSON {"topicChanged":boolean,"title":string,"newBullets":[{"text":string,"atMs":integer}]}. "title" is a short plain-English name (2-6 words) for the topic of the newest transcript lines. Set topicChanged=true only when discussion has clearly moved to a different topic than activeTopic.title. Each new bullet is one concise, concrete point (decisions, asks, facts, ideas, open questions) in plain English, with "atMs" copied exactly from the startMs of the transcript line that best supports it. Skip filler, mic checks, and repetition. Sentences addressed to ' + MAIN_AGENT_NAME + ' (the AI assistant' + (MAIN_AGENT_NAME === 'Archimedes' ? '; often mis-transcribed as "our communities" or "our comedies"' : '') + ') are requests to the assistant, not meeting content: leave them out, along with any answer text. Return [] when nothing is new. Never restate existing bullets.';
@@ -294,7 +294,7 @@ async function deliverFinished() {
     const busy = detail.jobs?.enhance === 'running' || (detail.jobs?.transcribe_pending || 0) > 0;
     if (busy && Date.now() - finishSeen.get(m.id) < SUMMARY_WAIT_MS) continue;   // wait for the full transcript and summary
     const visible = (await listAgents().catch(() => [])).find((a) => a.id === route);
-    if (!visible) {   // the private agent: only the owner's own device may open it, so the Mizel client sends it
+    if (!visible) {   // the private agent: only the owner's own device may open it, so the Recorder client sends it
       if (!state.due?.[m.id]) { state.due = { ...(state.due || {}), [m.id]: { agent: route, at: new Date().toISOString() } }; save(); logEvent('finish.due', { meetingId: m.id, agent: route }); }
       continue;
     }
@@ -370,7 +370,7 @@ async function dispatchAsk(ask, title) {
   const call = routed ? (pathname, opts = {}) => orbCall(pathname, { ...opts, agent: ask.agent }) : wizard;
   const who = ask.agentLabel || MAIN_AGENT_NAME;
   try {
-    const threadId = routed ? await createAgentThread(ask.agent, `Mizel.ai · Ask → ${who}`) : await liveThreadFor(ask.id, 'Mizel.ai · Manual ask');
+    const threadId = routed ? await createAgentThread(ask.agent, `Recorder · Ask → ${who}`) : await liveThreadFor(ask.id, 'Recorder · Manual ask');
     ask.threadId = threadId; save();
     broadcast(ask.meetingId, { type: 'ask', ask: publicAsk(ask) });
     const run = await call('/v1/runs', { method: 'POST', json: { session_id: threadId, input: promptFor(ask, title) }, headers: { 'Idempotency-Key': ask.id } });
@@ -699,7 +699,7 @@ const server = http.createServer(async (req, res) => {
     save(); logEvent('finish.route', { meetingId: msg.meetingId, agent: id });
     return sendRaw(res, 200, JSON.stringify({ route: finishRouteFor(msg.meetingId), isDefault: !state.routes[msg.meetingId], default: DEFAULT_AGENT }), 'application/json');
   }
-  // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Mizel client.
+  // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Recorder client.
   if (p === '/deliveries/due' && req.method === 'GET') {
     const due = Object.entries(state.due || {}).filter(([mid, d]) => d.agent && d.agent !== 'none' && !state.delivered?.[mid]).map(([mid, d]) => ({ meetingId: mid, agent: d.agent }));
     return sendRaw(res, 200, JSON.stringify({ due }), 'application/json');

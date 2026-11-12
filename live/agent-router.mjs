@@ -1,7 +1,7 @@
 import { ownerIdentityPrompt } from './owner-identity.mjs';
 
 // Agent router: the owner picks which Wizard agent a recording (or a manual ask) goes to.
-// Nothing here runs on its own. A transcript leaves Mizel only when the owner taps Send.
+// Nothing here runs on its own. A transcript leaves Recorder only when the owner taps Send.
 export const MAIN_AGENT = 'hermes';
 const AGENT_ID = /^[a-z][a-z0-9-]{0,30}$/;
 const TRANSCRIPT_CAP = 600_000;
@@ -46,9 +46,9 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
   const title = (meeting?.title || 'Untitled recording').trim();
   const lines = [];
   const ask = String(note || '').trim();
-  lines.push(ask || `This Mizel.ai recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
+  lines.push(ask || `This Recorder recording just finished and comes to you (${label}). Read it and tell me what matters: key points, decisions, and anything I should act on.`);
   lines.push('', ownerIdentityPrompt(), '', '---', '', `# ${title}`);
-  const meta = [localTime(meeting?.started_at) && `${localTime(meeting.started_at)} (${TIME_ZONE.split('/').pop().replace(/_/g, ' ')})`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Mizel.ai'].filter(Boolean);
+  const meta = [localTime(meeting?.started_at) && `${localTime(meeting.started_at)} (${TIME_ZONE.split('/').pop().replace(/_/g, ' ')})`, meeting?.duration_ms ? `${Math.round(meeting.duration_ms / 60000)} min` : '', 'Sent from Recorder'].filter(Boolean);
   lines.push(meta.join(' · '));
   const attendees = meeting?.calendar_event?.attendees;
   if (Array.isArray(attendees) && attendees.length) lines.push(`Attendees: ${attendees.slice(0, 30).join(', ')}`);
@@ -61,7 +61,7 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
     }
   }
   const enhanced = typeof meeting?.enhanced?.markdown === 'string' ? meeting.enhanced.markdown.replace(/[\u0000-\u0008\u000e-\u001f\u2063]/g, '').trim() : '';
-  if (enhanced) lines.push('', '## Summary (Mizel)', '', enhanced.replace(/^# .*\n?/, '').trim());
+  if (enhanced) lines.push('', '## Summary (Recorder)', '', enhanced.replace(/^# .*\n?/, '').trim());
   const notes = typeof meeting?.notes === 'string' ? meeting.notes.trim() : '';
   if (notes) lines.push('', '## Notes', '', notes);
   const segments = (meeting?.segments || []).filter((s) => s?.text && s.text.trim());
@@ -80,5 +80,5 @@ export function transcriptPacket({ meeting, summary, note = '', agentLabel: labe
 }
 
 export function threadTitle(meetingTitle, label) {
-  return `Mizel · ${String(meetingTitle || 'Recording').slice(0, 48)} → ${label}`.slice(0, 90);
+  return `Recorder · ${String(meetingTitle || 'Recording').slice(0, 48)} → ${label}`.slice(0, 90);
 }

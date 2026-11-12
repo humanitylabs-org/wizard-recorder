@@ -37,6 +37,7 @@ agent_binding:
   required: false
   purpose: Where your meeting recaps go
 health: /healthz
+owner_proof: hmac-v1   # wizard-os#133: switch calls need the signed owner proof once the box turns owner proof on
 switches:
   contract: wizard.app-switches/1
   path: /api/switches

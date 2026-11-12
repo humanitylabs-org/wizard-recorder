@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -136,6 +137,18 @@ def origin_ok(headers, allowed_origins) -> bool:
     return origin in allowed_origins or (o.scheme in ('http', 'https') and o.netloc.lower() == host)
 
 
+# Under the shell's browser boundary (wizard-os#133) the live screen runs in a sandboxed frame with an opaque origin,
+# so the browser asks for its module script (`<script type="module" src="app.js">`) with `Origin: null` and needs a
+# CORS answer, or the page stays blank. Only the screen's own public files get that: GET/HEAD of one file name with a
+# script, style, picture, font or manifest extension, answered with `*` and no credentials (such a request carries no
+# cookies). The page itself, its JSON and every API or write keep their answers; the shell carries the page's own calls.
+ASSET = re.compile(r'[\w-][\w.-]*\.(?:js|mjs|css|svg|png|webmanifest|woff2?)')
+
+
+def opaque_asset(method: str, headers, rest: str) -> bool:
+    return method in ('GET', 'HEAD') and headers.get('origin') == 'null' and bool(ASSET.fullmatch(rest))
+
+
 def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
     """Add the switch-gated /live/ proxy, the /live/live WebSocket and the watchdog to the FastAPI app."""
     def off():
@@ -166,7 +179,8 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
         if not await runner.ensure(data):
             return needs(missing() or [runner.error or 'a restart of the app'])
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
-        if request.headers.get('origin'):
+        opaque = opaque_asset(request.method, request.headers, rest)
+        if request.headers.get('origin') and not opaque:
             headers['origin'] = f'http://127.0.0.1:{port()}' if origin_ok(request.headers, allowed_origins) else 'null'
         url = f'http://127.0.0.1:{port()}{BASE}/{rest}'
         client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=5))
@@ -177,6 +191,8 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
             await client.aclose()
             return JSONResponse({'error': f'Live screen unreachable: {type(e).__name__}'}, 502)
         out = {k: v for k, v in up.headers.items() if k.lower() not in HOP and k.lower() != 'content-encoding'}
+        if opaque and up.status_code == 200:
+            out['Access-Control-Allow-Origin'] = '*'
 
         async def close():
             await up.aclose()

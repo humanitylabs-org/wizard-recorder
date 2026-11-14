@@ -74,6 +74,26 @@ def test_chunks_notes_and_stop(tmp_path):
     run_test(tmp_path,test)
 
 
+def test_capture_start_events_reach_the_log(tmp_path, caplog):
+    """Issue #16: each step of a microphone start is logged so a start that hangs is visible from the box."""
+    async def test(s, c):
+        mid = (await c.post('/api/meetings', json={})).json()['id']
+        ep = f'/api/meetings/{mid}/capture-events'
+        with caplog.at_level('INFO', logger='meetings'):
+            assert (await c.post(ep, json={'event': 'start_requested', 'ms': 0, 'detail': {'prepared': True}})).status_code == 200
+            assert (await c.post(ep, json={'event': 'start_timeout', 'ms': 10003, 'detail': {'shell': 'starting'}})).status_code == 200
+        assert f'capture {mid} start_timeout +10003ms' in caplog.text
+        got = (await c.get(ep)).json()['events']
+        assert [e['event'] for e in got] == ['start_requested', 'start_timeout']
+        assert (await c.post(ep, json={'event': 'Bad Event!', 'ms': 0})).status_code == 400
+        assert (await c.post(ep, json={'event': 'x', 'ms': -1})).status_code == 400
+        assert (await c.post(ep, json={'event': 'x', 'detail': 'nope'})).status_code == 400
+        assert (await c.post('/api/meetings/mt_missing000/capture-events', json={'event': 'x'})).status_code == 404
+        big = (await c.post(ep, json={'event': 'start_failed', 'detail': {'message': 'y' * 5000}}))
+        assert big.status_code == 200 and len((await c.get(ep)).json()['events'][-1]['detail']) <= 400
+    run_test(tmp_path, test)
+
+
 def test_mcp_tools(tmp_path):
     async def test(s,c):
         async def rpc(method,params=None):

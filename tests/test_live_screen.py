@@ -9,7 +9,7 @@ import pytest
 LIVE = Path(__file__).resolve().parents[1] / 'live'
 # Pure Node tests that pass against the served bytes. node:sqlite needs Node >= 22.5.
 GREEN = ['test-agent-router.mjs', 'test-live-recovery.mjs', 'test-no-system-audio-prompt.mjs',
-         'test-orb-events.mjs', 'test-recording-retry.mjs']
+         'test-orb-events.mjs', 'test-recording-retry.mjs', 'test-recording-start-timeout.mjs']
 SQLITE = ['test-orb-authority.mjs']
 
 

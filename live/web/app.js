@@ -181,6 +181,7 @@ const API = {
   chunk: (id, source, seq, start_ms, blob) =>
     api(`api/meetings/${enc(id)}/chunks?${new URLSearchParams({ source, seq, start_ms })}`, { method: 'POST', body: blob, headers: { 'Content-Type': 'audio/wav' } }),
   stop: (id, body) => api(`api/meetings/${enc(id)}/stop`, body ? { method: 'POST', json: body } : { method: 'POST' }),
+  captureEvent: (id, body) => api(`api/meetings/${enc(id)}/capture-events`, { method: 'POST', json: body }),
   audioUrl: (id) => `api/meetings/${enc(id)}/audio.wav`,
   enhance: (id, template) => api(`api/meetings/${enc(id)}/enhance`, { method: 'POST', json: { template } }),
   ask: (id, question) => api(`api/meetings/${enc(id)}/ask`, { method: 'POST', json: { question } }),
@@ -1153,6 +1154,18 @@ const captureCaps = () => { try { return WizardApp.capture.capabilities({ kind: 
 const supportsSystemAudio = () => !!captureCaps().systemAudio;
 function prewarmCapture() { return WizardApp.capture.prepare({ kind: 'meeting', pcm: true, systemAudio: false }); }
 function discardWarm(w) { w?.release?.(); }
+// A microphone start that never answers must not leave "Starting…" on screen for ever (issue #16, James's phone,
+// 14 Nov 2026): after this long the Recorder shows an error with Try again. The start itself keeps running, so a
+// late answer still becomes the recording and its first audio is kept.
+const START_TIMEOUT_MS = 10000;
+// Capture-start diagnostics (issue #16): each step lands in this app's server log, so the next hang is visible
+// from the box. Fire-and-forget; never blocks or fails the recording.
+function captureDiag(engine, event, detail = {}) {
+  if (!engine?.meetingId) return;
+  const ms = Math.max(0, Math.round(performance.now() - (engine.t0 ?? performance.now())));
+  try { console.info('recorder capture', event, ms, detail); } catch {}
+  try { void API.captureEvent(engine.meetingId, { event, ms, detail }).catch(() => {}); } catch {}
+}
 
 // In-memory upload queue with exponential backoff; one request in flight at a time.
 class Uploader {
@@ -1197,18 +1210,27 @@ class SharedMeeting {
     const key=item.source+':'+item.seq;if(this.sent.has(key))return;this.sent.add(key);this.uploader.enqueue(item);
   }
   async start({ systemAudio }) {
-    this.session=await WizardApp.capture.start({ kind:'meeting',pcm:true,mime:'audio/wav',chunkMs:5000,
-      systemAudio:!!systemAudio && !!captureCaps().systemAudioStart, preparedId:this.warm?.id,
-      resumeId:this.captureId || undefined,seqBase:this.seqBase,offsetMs:this.offsetMs,meta:{meetingId:this.meetingId} });
-    this.captureId=this.session.id;this.info=this.session.getInfo();this.st=this.info.state;
-    sessionStorage.setItem('mizel.sharedCapture',JSON.stringify({id:this.captureId,meetingId:this.meetingId}));
-    this.offs.push(this.session.onLevel(lvl=>this.cbs.onLevel(lvl)),
-      this.session.onPcm(f=>this.cbs.onLive?.(f.pcm,f.startMs)),
-      this.session.onChunk(c=>this.acceptChunk(c)),
-      this.session.onWarn(msg=>this.cbs.onWarn(msg)),
-      this.session.onState(st=>{ this.st=st;this.info=this.session.getInfo();this.cbs.onNative?.(st,this); }));
-    for(const item of await this.session.chunks())this.acceptChunk(item);
+    this.t0=performance.now();this.starting=true;this.seen={};
+    captureDiag(this,'start_requested',{resume:!!this.captureId,prepared:!!this.warm?.id});
+    try {
+      this.session=await WizardApp.capture.start({ kind:'meeting',pcm:true,mime:'audio/wav',chunkMs:5000,
+        systemAudio:!!systemAudio && !!captureCaps().systemAudioStart, preparedId:this.warm?.id,
+        resumeId:this.captureId || undefined,seqBase:this.seqBase,offsetMs:this.offsetMs,meta:{meetingId:this.meetingId} });
+      this.captureId=this.session.id;this.info=this.session.getInfo();this.st=this.info.state;
+      captureDiag(this,'start_returned',{native:!!this.info.native,livePcm:this.info.livePcm!==false,late:!!this.startTimedOut});
+      sessionStorage.setItem('mizel.sharedCapture',JSON.stringify({id:this.captureId,meetingId:this.meetingId}));
+      this.offs.push(this.session.onLevel(lvl=>{this.firstSeen('level');this.cbs.onLevel(lvl);}),
+        this.session.onPcm(f=>{this.firstSeen('pcm');this.cbs.onLive?.(f.pcm,f.startMs);}),
+        this.session.onChunk(c=>{this.firstSeen('chunk');this.acceptChunk(c);}),
+        this.session.onWarn(msg=>this.cbs.onWarn(msg)),
+        this.session.onState(st=>{ this.st=st;this.info=this.session.getInfo();this.cbs.onNative?.(st,this); }));
+      for(const item of await this.session.chunks())this.acceptChunk(item);
+    } catch(e) {
+      captureDiag(this,'start_failed',{code:e?.code||e?.name||null,message:String(e?.message||e).slice(0,160),late:!!this.startTimedOut});
+      throw e;
+    } finally { this.starting=false; }
   }
+  firstSeen(kind) { if(!this.seen || this.seen[kind])return; this.seen[kind]=true; captureDiag(this,'first_'+kind); }
   async pause() { await this.session.pause(); }
   async resume() { await this.session.resume(); }
   async addSystemAudio() { await this.session.setSystemAudio(true);this.info=this.session.getInfo();this.cbs.onState(); }
@@ -1313,12 +1335,13 @@ async function clearEmptyFailedStart(r) {
 }
 function failedStartOwnsMemory(r) {
   const e = r?.engine;
-  return !!(e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
+  // A start that timed out on screen but is still running in the shell may yet hand over a live take (issue #16).
+  return !!(e?.starting || e?.captureId || e?.session || e?.result || e?.uploader?.pending || e?.uploader?.running || e?.sent?.size || Object.keys(e?.finalSeq || {}).length);
 }
 async function beginRecording({ warm = null, resume = false, fresh = false } = {}) {
   const m = state.current; if (!m || deletingMeetings.has(m.id)) return;
   if (state.rec && state.rec.phase !== 'error') return;
-  if (state.rec?.engine?.captureId) { navigate(state.rec.meetingId); return; }
+  if (state.rec?.engine?.captureId || state.rec?.engine?.starting) { navigate(state.rec.meetingId); return; }
   if (state.rec) {
     const r = state.rec;
     if (!await clearEmptyFailedStart(r)) { if (state.rec === r && !failedStartOwnsMemory(r)) await reattachShared(r); return; }
@@ -1340,16 +1363,21 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
   const engine=new SharedMeeting(m.id,cbs,{warm,seqBase,offsetMs});
   state.rec = { meetingId: m.id, title: m.title, engine, phase: 'starting', paused: false, error: null };
   renderDoc(); renderRecBanner(); startPillClock();
+  armStartWatchdog(state.rec, engine);
   try {
     await engine.start({ systemAudio: false });
+    clearTimeout(engine.watchdog);
     if (state.rec?.engine !== engine) return;
-    state.rec.phase = 'recording';
+    // A late answer after the on-screen timeout still becomes this recording: its audio is already flowing.
+    state.rec.phase = 'recording'; state.rec.error = null;
+    if (state.rec.endWhenStarted) { await stopRecording(); return; }
     if (fresh && !resume && state.current?.id === m.id) showParticipantsHint();
     // New phone builds tee 250 ms PCM frames while durable uploads stay at 5 s. Older builds follow uploads.
     live.start(m.id, m.title, { follow: engine.native && !engine.livePcm });
     if (state.current?.id === m.id && state.current.status !== 'recording') setCurrent({ ...state.current, status: 'recording' });
     if (state.current?.id === m.id && !isImported(m) && !els.notepad.hidden && !mobileMQ.matches) els.notepad.focus({ preventScroll: true });
   } catch (e) {
+    clearTimeout(engine.watchdog);
     // Start can reject after obtaining a live session. Retain it for Stop/Retry, never abort audio.
     discardWarm(engine.warm); engine.warm = null;
     if (state.rec?.engine !== engine) return;
@@ -1361,6 +1389,20 @@ async function beginRecording({ warm = null, resume = false, fresh = false } = {
   }
   if (state.current?.id === m.id) renderDoc();
   renderRecBanner(); schedulePoll(); notifyNative();
+}
+// The shell's meeting start has no time limit of its own, so the Recorder bounds what the owner sees (issue #16).
+function armStartWatchdog(r, engine) {
+  clearTimeout(engine.watchdog);
+  engine.watchdog = setTimeout(() => {
+    if (state.rec !== r || r.engine !== engine || r.phase !== 'starting' || !engine.starting) return;
+    engine.startTimedOut = true;
+    let shell = null; try { shell = WizardApp.capture.current()?.phase || 'none'; } catch {}
+    captureDiag(engine, 'start_timeout', { afterMs: START_TIMEOUT_MS, shell });
+    r.phase = 'error';
+    r.error = 'The microphone didn\u2019t start. Tap Try again. If it keeps happening, close and reopen Wizard.';
+    renderPill(); renderRecBanner(); notifyNative();
+    if (state.current?.id === r.meetingId) renderDoc();
+  }, START_TIMEOUT_MS);
 }
 // A recording left paused this long finishes by itself (the phone recorder enforces the same limit natively),
 // so a forgotten pause never holds the summary thread back for hours.
@@ -1401,6 +1443,13 @@ async function retryRecording() {
   if(r?.phase!=='error')return;
   if(r.deletionConfirmed) { r.phase='deleting'; return finishDeletedRecording(r); }
   if(engine?.result)return stopRecording();
+  if(engine?.starting) {
+    // The first start is still running in the shell (issue #16). Wait on it again rather than opening a second one,
+    // unless the shell already let go of it.
+    let held=true;try{held=!!WizardApp.capture.current();}catch{}
+    if(held){r.phase='starting';r.error=null;captureDiag(engine,'start_retry_wait');armStartWatchdog(r,engine);renderPill();if(state.current?.id===r.meetingId)renderDoc();return;}
+    captureDiag(engine,'start_retry_fresh');engine.starting=false;
+  }
   if(!engine?.captureId)return beginRecording({});
   r.phase='starting';r.error=null;engine.detach();renderPill();
   try {
@@ -1519,6 +1568,8 @@ function stopAnyway() {
   toast(`${pluralize(lost, 'chunk')} retained by shared capture. Reconnect and retry saving.`, {error:true,action:{label:'Retry save',fn:()=>stopRecording()}});
 }
 async function finishWithoutAudio(m) {
+  // Still waiting for the shell to answer the start (issue #16): stop as soon as it does, never orphan its audio.
+  if (state.rec?.meetingId === m.id && state.rec.engine?.starting) { state.rec.endWhenStarted = true; toast('The microphone is still starting. The recording ends as soon as it answers.'); return; }
   if (state.rec?.meetingId === m.id) { await stopRecording(); return; }
   await finishStop(m.id);
 }

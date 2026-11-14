@@ -17,6 +17,7 @@ import subprocess
 import time
 import uuid
 import wave
+from collections import deque
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1070,6 +1071,45 @@ async def get_segments(mid: str, after: str = ""):
                 segs = segs[ids.index(after) + 1:]
         pending = c.execute("SELECT COUNT(*) FROM chunks WHERE meeting_id=? AND state IN ('pending','running')", (mid,)).fetchone()[0]
         return {"segments": segs, "transcribe_pending": pending, "status": row["status"]}
+
+
+# Capture-start diagnostics (issue #16): the web app reports each step of a microphone start (requested, start
+# returned, first level/PCM/chunk, timeout) so a start that hangs on a phone is visible in this app's log.
+# Kept in memory only (last few per meeting); nothing here is audio or transcript content.
+CAPTURE_EVENTS: dict[str, deque] = {}
+CAPTURE_EVENT_RE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
+@app.post("/api/meetings/{mid}/capture-events")
+async def post_capture_event(mid: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "expected JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    event, ms, detail = body.get("event"), body.get("ms", 0), body.get("detail") or {}
+    if not isinstance(event, str) or not CAPTURE_EVENT_RE.fullmatch(event):
+        raise HTTPException(400, "invalid event")
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool) or not 0 <= ms <= 86_400_000:
+        raise HTTPException(400, "invalid ms")
+    if not isinstance(detail, dict):
+        raise HTTPException(400, "detail must be an object")
+    detail_s = json.dumps(detail, separators=(",", ":"), default=str)[:400]
+    with closing(db()) as c:
+        if not c.execute("SELECT 1 FROM meetings WHERE id=? AND deleted=0", (_mid(mid),)).fetchone():
+            raise HTTPException(404, "meeting not found")
+    log.info("capture %s %s +%dms %s", mid, event, int(ms), detail_s)
+    if mid not in CAPTURE_EVENTS and len(CAPTURE_EVENTS) >= 200:
+        CAPTURE_EVENTS.pop(next(iter(CAPTURE_EVENTS)))
+    CAPTURE_EVENTS.setdefault(mid, deque(maxlen=40)).append(
+        {"at": now_iso(), "event": event, "ms": int(ms), "detail": detail_s})
+    return {"ok": True}
+
+
+@app.get("/api/meetings/{mid}/capture-events")
+async def get_capture_events(mid: str):
+    return {"events": list(CAPTURE_EVENTS.get(_mid(mid), ()))}
 
 
 STOP_REASONS = {"user", "pause_timeout", "process_death", "stale"}

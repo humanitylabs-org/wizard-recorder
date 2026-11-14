@@ -387,6 +387,79 @@
         }
       }
     },
+    "/api/meetings/{mid}/capture-events": {
+      "post": {
+        "summary": "Post Capture Event",
+        "operationId": "post_capture_event_api_meetings__mid__capture_events_post",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "description": "JSON body {event, ms, detail}: one step of a microphone start (start_requested, start_returned, first_level, first_pcm, first_chunk, start_timeout, start_failed, ...). Logged and kept in memory (last 40 per meeting) so a start that hangs is visible from the box (issue #16)."
+      },
+      "get": {
+        "summary": "Get Capture Events",
+        "operationId": "get_capture_events_api_meetings__mid__capture_events_get",
+        "parameters": [
+          {
+            "name": "mid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Mid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{mid}/stop": {
       "post": {
         "summary": "Stop Meeting",

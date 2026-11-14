@@ -11,6 +11,8 @@ Recording flow:
 
 `PUT /api/meetings/{id}/notes` accepts `notes` and `base_rev`; a stale revision returns 409. `PATCH /api/meetings/{id}` changes title. `GET /api/meetings?q=term&limit=100` searches this app's content; limit is 1–200. `DELETE /api/meetings/{id}` marks a meeting deleted.
 
+`POST /api/meetings/{id}/capture-events` with `{"event":"start_timeout","ms":10000,"detail":{}}` records one step of a microphone start (`start_requested`, `start_returned`, `first_level`, `first_pcm`, `first_chunk`, `start_timeout`, `start_failed`, `start_retry_wait`, `start_retry_fresh`) in the app log as `capture <id> <event> +<ms>ms`; `GET` on the same path returns the last 40 for that meeting (memory only, no audio or text). It makes a start that hangs on a phone visible from the box.
+
 `POST /api/uploads?title=Clip` accepts raw audio bytes, bounded to 100 MiB. It decodes only local uploaded bytes, then creates a meeting and queues WAV chunks through the identical transcription path. Invalid audio returns 415 without creating a meeting.
 
 `POST /api/meetings/{id}/enhance`, `POST /api/meetings/{id}/ask`, and `POST /api/ask` are optional owner-configured notes-model features. Unconfigured returns 503. `GET /api/calendar` returns an empty list in the portable package; no calendar credentials or imports are bundled.

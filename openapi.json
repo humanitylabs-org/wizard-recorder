@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Meeting Recorder",
-    "version": "0.2.5"
+    "version": "0.2.6"
   },
   "paths": {
     "/api/health": {

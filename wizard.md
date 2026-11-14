@@ -8,7 +8,7 @@ voice_names: [mizel, meetings, meeting recorder]
 tags: [audio, productivity]
 privacy: private
 # Private app: recordings and transcripts are not readable by public agents.
-version: 0.2.5
+version: 0.2.6
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only

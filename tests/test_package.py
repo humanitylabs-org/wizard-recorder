@@ -266,3 +266,19 @@ def test_entry_hands_root_owned_data_to_uid_1000_then_serves_as_1000():
     dockerfile = (root / 'Dockerfile').read_text()
     assert 'COPY start.py /app/start.py' in dockerfile and 'CMD ["python", "/app/start.py"]' in dockerfile
     assert '!start.py' in (root / '.dockerignore').read_text()
+
+
+def test_default_transcriber_host_is_a_declared_connection():
+    """Issue 20: on an isolated (fresh) box only declared connections share a network, so the default
+    TRANSCRIPTION_URL host `transcriber` must be reachable through a `uses:` entry the App Manager links."""
+    import json, re
+    root = Path(__file__).resolve().parents[1]
+    front = (root / 'wizard.md').read_text().split('---')[1]
+    uses = [u.strip() for u in re.search(r'^uses:\s*\[([^\]]*)\]', front, re.M).group(1).split(',') if u.strip()]
+    compose = (root / 'runtipi' / 'docker-compose.yml').read_text()
+    config = json.loads((root / 'runtipi' / 'config.json').read_text())
+    field = next(f for f in config['form_fields'] if f['env_variable'] == 'TRANSCRIPTION_URL')
+    for url in (re.search(r'TRANSCRIPTION_URL:-([^}]+)\}', compose).group(1), field['default']):
+        assert re.match(r'http://transcriber:\d+/', url), url
+    # `transcription` is the slot the Transcriber app (id transcriber) provides; the link answers by its app id.
+    assert 'transcription' in uses or 'transcriber' in uses, uses

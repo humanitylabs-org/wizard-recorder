@@ -31,7 +31,7 @@ view:
   port: 8080
 provides: [meeting-recording, meeting-transcripts]
 system: false
-uses: []
+uses: [transcription]   # the App Manager links this app to the box's Transcription app, which answers as `transcriber` (issue 20)
 needs: [mic]
 agent_binding:
   required: false

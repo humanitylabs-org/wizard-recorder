@@ -37,6 +37,8 @@ HOME = Path.home()
 DATA = Path(os.environ.get("MEETINGS_DATA_DIR", os.environ.get("MEETINGS_DATA", "/data")))
 WEB = Path(os.environ.get("MEETINGS_WEB_DIR", Path(__file__).resolve().parent.parent / "web"))
 STT_URL = os.environ.get("MEETINGS_STT_URL", os.environ.get("TRANSCRIPTION_URL", ""))
+# OpenAI-style transcription endpoints (the shared Transcriber/speaches) require `model`.
+STT_MODEL = os.environ.get("MEETINGS_STT_MODEL", os.environ.get("TRANSCRIPTION_MODEL", "")).strip()
 LLM_URL = os.environ.get("MEETINGS_LLM_URL", "")
 LLM_MODEL = os.environ.get("MEETINGS_LLM_MODEL", "glm-5-3")
 LLM_FAST_MODEL = os.environ.get("MEETINGS_LLM_FAST_MODEL", "glm-5-3-flash")
@@ -372,6 +374,17 @@ def meeting_summary(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def transcribe_failures(c: sqlite3.Connection, mid: str) -> tuple[int, str | None]:
+    """How many chunks could not be transcribed, and the latest reason (retrying ones included)."""
+    failed = c.execute("SELECT COUNT(*) FROM chunks WHERE meeting_id=? AND state='failed'", (mid,)).fetchone()[0]
+    err = c.execute("SELECT error FROM chunks WHERE meeting_id=? AND error IS NOT NULL AND error<>''"
+                    " ORDER BY rowid DESC LIMIT 1", (mid,)).fetchone()
+    if not err:
+        err = c.execute("SELECT error FROM tx_window WHERE meeting_id=? AND error IS NOT NULL AND error<>'' LIMIT 1",
+                        (mid,)).fetchone()
+    return failed, (err[0] if err else None)
+
+
 def meeting_detail(c: sqlite3.Connection, mid: str) -> dict[str, Any]:
     row = c.execute("SELECT * FROM meetings WHERE id=? AND deleted=0", (mid,)).fetchone()
     if not row:
@@ -384,6 +397,7 @@ def meeting_detail(c: sqlite3.Connection, mid: str) -> dict[str, Any]:
         enh = {"template": "imported", "markdown": row["import_summary"], "created_at": row["created_at"],
                "model": row["source"], "evidence": []}
     pending = c.execute("SELECT COUNT(*) FROM chunks WHERE meeting_id=? AND state IN ('pending','running')", (mid,)).fetchone()[0]
+    failed, tx_error = transcribe_failures(c, mid)
     tracks = [{"source": r[0], "chunks": r[1]} for r in c.execute(
         "SELECT source, COUNT(*) FROM chunks WHERE meeting_id=? GROUP BY source", (mid,))]
     asks = [{"id": r["id"], "question": r["question"], "answer": r["answer"], "created_at": r["created_at"],
@@ -391,6 +405,7 @@ def meeting_detail(c: sqlite3.Connection, mid: str) -> dict[str, Any]:
         "SELECT * FROM asks WHERE meeting_id=? ORDER BY created_at", (mid,))]
     d.update(notes=row["notes"], notes_rev=row["notes_rev"], segments=segs, enhanced=enh, asks=asks,
              jobs={"enhance": row["enhance_state"], "transcribe_pending": pending,
+                   "transcribe_failed": failed, "transcribe_error": tx_error,
                    "enhance_error": row["enhance_error"]},
              audio={"tracks": tracks})
     return d
@@ -603,12 +618,31 @@ class NoSpeech(Exception):
     pass
 
 
+class STTRefused(RuntimeError):
+    """The transcription service rejected the request itself (e.g. 422). Splitting the audio won't help."""
+
+
+def _refusal_detail(r: httpx.Response) -> str:
+    try:
+        detail = r.json().get("detail")
+    except Exception:  # noqa: BLE001
+        detail = None
+    if isinstance(detail, list):
+        parts = []
+        for d in detail:
+            if isinstance(d, dict):
+                loc = ".".join(str(x) for x in (d.get("loc") or []) if x != "body")
+                parts.append(f"{loc}: {d.get('msg', '')}".strip(": "))
+        detail = "; ".join(p for p in parts if p)
+    return str(detail or r.text or "")[:160]
+
+
 async def stt(client: httpx.AsyncClient, data: bytes, depth: int = 0, prompt: str = "") -> str:
     try:
-        r = await client.post(STT_URL, files={"file": ("chunk.wav", data, "audio/wav")},
-                              data={"mode": "meeting", **({"prompt": prompt} if prompt else {})})
+        form = {"mode": "meeting", **({"model": STT_MODEL} if STT_MODEL else {}), **({"prompt": prompt} if prompt else {})}
+        r = await client.post(STT_URL, files={"file": ("chunk.wav", data, "audio/wav")}, data=form)
         if r.status_code == 422:
-            return ""
+            raise STTRefused(f"transcriber refused the request (422): {_refusal_detail(r)}")
         if r.status_code == 502 and "no transcript" in r.text:
             return ""
         r.raise_for_status()
@@ -616,8 +650,8 @@ async def stt(client: httpx.AsyncClient, data: bytes, depth: int = 0, prompt: st
         if re.search(r"(?i)^(i'?m sorry|i cannot|as an ai|i can'?t (help|assist|transcribe))", text):
             raise RuntimeError("assistant_refusal")
         return text
-    except Exception:
-        if depth >= 2 or len(data) < 16000:
+    except Exception as exc:
+        if isinstance(exc, STTRefused) or depth >= 2 or len(data) < 16000:
             raise
         a, b = _split_wav(data)
         return " ".join(t for t in [await stt(client, a, depth + 1, prompt), await stt(client, b, depth + 1, prompt)] if t)
@@ -708,6 +742,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
             break
         else:
             return False
+    failed_error = None
     try:
         text = await stt(client, _wav_bytes(job["pcm"]), prompt=WINDOW_PROMPT) if len(job["pcm"]) > 9600 else ""
     except Exception as exc:  # noqa: BLE001
@@ -721,6 +756,7 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
                           (job["meeting_id"], job["source"], job["start_ms"], attempts, time.time() + min(300, 10 * attempts), str(exc)[:200]))
                 return True
             text = ""  # give up on this stretch; keep the audio, move on
+            failed_error = str(exc)[:200]
     end_ms = job["start_ms"] + job["cut_ms"]
     with closing(db()) as c:
         if text:
@@ -729,8 +765,8 @@ async def window_pass(client: httpx.AsyncClient) -> bool:
                        job["start_ms"], end_ms, text, job["first_seq"]))
         for k in job["run"]:
             if k["start_ms"] + k["duration_ms"] <= end_ms + 5:
-                c.execute("UPDATE chunks SET state='done', error=NULL WHERE meeting_id=? AND source=? AND seq=?",
-                          (job["meeting_id"], job["source"], k["seq"]))
+                c.execute("UPDATE chunks SET state=?, error=? WHERE meeting_id=? AND source=? AND seq=?",
+                          ("failed" if failed_error else "done", failed_error, job["meeting_id"], job["source"], k["seq"]))
         c.execute("INSERT INTO tx_window(meeting_id,source,cursor_ms,attempts,next_at,error) VALUES (?,?,?,0,0,NULL)"
                   " ON CONFLICT(meeting_id,source) DO UPDATE SET cursor_ms=excluded.cursor_ms, attempts=0, next_at=0, error=NULL",
                   (job["meeting_id"], job["source"], end_ms))
@@ -1070,7 +1106,9 @@ async def get_segments(mid: str, after: str = ""):
             if after in ids:
                 segs = segs[ids.index(after) + 1:]
         pending = c.execute("SELECT COUNT(*) FROM chunks WHERE meeting_id=? AND state IN ('pending','running')", (mid,)).fetchone()[0]
-        return {"segments": segs, "transcribe_pending": pending, "status": row["status"]}
+        failed, tx_error = transcribe_failures(c, mid)
+        return {"segments": segs, "transcribe_pending": pending, "transcribe_failed": failed,
+                "transcribe_error": tx_error, "status": row["status"]}
 
 
 # Capture-start diagnostics (issue #16): the web app reports each step of a microphone start (requested, start

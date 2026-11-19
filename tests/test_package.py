@@ -127,10 +127,51 @@ def test_transcription_contract_and_errors(tmp_path):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as stt:
             assert await s.stt(stt,wav_bytes())=='fixture-only result'
             assert b'name="mode"' in seen[0] and b'meeting' in seen[0]
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req:httpx.Response(422,json={'detail':'invalid model'}))) as stt:
-            assert await s.stt(stt,wav_bytes()) == ''
+            assert b'name="model"' not in seen[0]  # no model configured: none invented
+        # A refusal (422) is an error, never a silent empty "no speech" transcript, and is not split/retried.
+        calls=[]
+        def refuse(req):
+            calls.append(req)
+            return httpx.Response(422,json={'detail':[{'type':'missing','loc':['body','model'],'msg':'Field required'}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as stt:
+            with pytest.raises(s.STTRefused, match='model: Field required'):
+                await s.stt(stt,wav_bytes()*3)
+        assert len(calls)==1
         assert (await c.post('/api/uploads',content=b'not audio')).status_code==415
         assert (await c.get('/api/meetings')).json()['meetings']==[]
+    run_test(tmp_path,test)
+
+
+def test_transcription_sends_configured_model(tmp_path):
+    # Fresh installs point at the shared Transcriber (speaches), which answers 422 without `model` (#24).
+    async def test(s,c):
+        seen=[]
+        def handler(req):
+            seen.append(req.content)
+            return httpx.Response(200,json={'text':'hello'})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as stt:
+            assert await s.stt(stt,wav_bytes(),prompt='p')=='hello'
+        assert b'name="model"' in seen[0] and b'Systran/faster-whisper-small' in seen[0]
+        assert b'name="mode"' in seen[0]
+    run_test(tmp_path,test,env={'TRANSCRIPTION_MODEL':'Systran/faster-whisper-small'})
+    os.environ.pop('TRANSCRIPTION_MODEL', None)
+
+
+def test_failed_transcription_is_reported(tmp_path):
+    async def test(s,c):
+        m=(await c.post('/api/meetings',json={})).json()
+        ep='/api/meetings/'+m['id']
+        assert (await c.post(ep+'/chunks?source=me&seq=0&start_ms=0',content=wav_bytes(200))).status_code==200
+        await c.post(ep+'/stop',json={'final_seq':{'me':0}})
+        import sqlite3
+        from contextlib import closing
+        with closing(s.db()) as db:
+            db.execute("UPDATE chunks SET state='failed', error=? WHERE meeting_id=?",
+                       ('transcriber refused the request (422): model: Field required', m['id']))
+        jobs=(await c.get(ep)).json()['jobs']
+        assert jobs['transcribe_failed']==1 and 'model: Field required' in jobs['transcribe_error']
+        segs=(await c.get(ep+'/segments')).json()
+        assert segs['transcribe_failed']==1 and segs['transcribe_error']
     run_test(tmp_path,test)
 
 

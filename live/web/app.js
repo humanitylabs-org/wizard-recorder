@@ -683,6 +683,10 @@ function renderStatus(m) {
       h('span', { class: 'msg', text: 'Still marked as recording, perhaps from another device or an interrupted session.' }),
       h('button', { class: 'w-btn w-btn-sm w-btn-primary', type: 'button', text: 'Resume here', onclick: () => beginRecording({ resume: true }) }),
       h('button', { class: 'w-btn w-btn-sm', type: 'button', text: 'End', onclick: () => finishWithoutAudio(m) })));
+  } else if (m.jobs?.transcribe_failed && m.status !== 'recording' && !m.jobs.transcribe_pending) {
+    const n = m.jobs.transcribe_failed;
+    kids.push(h('div', { class: 'w-notice is-danger' }, h('span', { class: 'msg',
+      text: `The Transcriber could not transcribe ${pluralize(n, 'chunk')} of this recording. The audio is kept.${m.jobs.transcribe_error ? ` Reason: ${m.jobs.transcribe_error}` : ''}` })));
   } else if (m.status === 'processing') {
     const n = m.jobs?.transcribe_pending || 0;
     kids.push(h('div', { class: 'w-notice is-accent' }, h('span', { class: 'w-spinner' }),
@@ -1065,7 +1069,7 @@ function renderSegments(container, { scrollEnd = false } = {}) {
     h('div', { class: 'txt' }, ...g.items.flatMap((s, i) => [i ? ' ' : null, h('span', { class: 'seg', dataset: { segId: s.id }, text: s.text })]))));
   const active = m && (m.status === 'recording' || m.status === 'processing');
   if (active && isLiveHere(m)) kids.push(h('div', { class: 'live-preview' }, ...livePreviewRows()));
-  else if (!segs.length) kids.push(h('div', { class: 'w-empty' }, active ? 'Transcribing…' : 'No transcript for this recording.'));
+  else if (!segs.length) kids.push(h('div', { class: 'w-empty' }, active ? 'Transcribing…' : (m?.jobs?.transcribe_failed ? 'Transcription failed for this recording. The audio is kept.' : 'No transcript for this recording.')));
   replace(container, ...kids);
   if (container === els.segments) {
     els.drawerCount.textContent = segs.length ? fmtClock(segs[segs.length - 1].end_ms || 0) : '';

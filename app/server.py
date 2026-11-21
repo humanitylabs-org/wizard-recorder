@@ -29,7 +29,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
-VERSION = "0.2.8"
+VERSION = "0.2.9"
 log = logging.getLogger("meetings")
 BKK = ZoneInfo(os.environ.get("MEETINGS_TIMEZONE", "UTC"))
 BASE = "/meetings"

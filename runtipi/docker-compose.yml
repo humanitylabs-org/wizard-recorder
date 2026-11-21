@@ -24,7 +24,7 @@ services:
       MEETINGS_LLM_KEY: ${MEETINGS_LLM_KEY:-}
       WIZARD_DELIVERY_URL: ${WIZARD_DELIVERY_URL:-}
       WIZARD_DELIVERY_TOKEN: ${WIZARD_DELIVERY_TOKEN:-}
-      # Live screen (switch "live-screen", off by default; issue #1). All optional; blank keeps it unconfigured.
+      # Live screen (issue #1). All optional; blank keeps it unconfigured.
       TINFOIL_API_KEY: ${TINFOIL_API_KEY:-}
       MIZEL_LIVE_REALTIME_MODEL: ${MIZEL_LIVE_REALTIME_MODEL:-voxtral-mini-4b-realtime}
       MIZEL_LIVE_SUMMARY_MODEL: ${MIZEL_LIVE_SUMMARY_MODEL:-deepseek-v4-1-flash}

@@ -16,7 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests'))
 sys.path.insert(0, str(ROOT / 'app'))
-from test_live_served import clean_env, free_port, node_ready, switch  # noqa: E402,F401
+from test_live_served import clean_env, free_port, node_ready  # noqa: E402,F401
 
 import live_screen  # noqa: E402
 
@@ -38,7 +38,6 @@ def test_opaque_page_gets_its_script_files_and_nothing_else(tmp_path):
     """Real uvicorn + real Node (dry mode), with the requests a sandboxed frame really sends."""
     if not node_ready():
         pytest.skip('node >= 22 with live/ dependencies not available')
-    switch(tmp_path, True)
     app_port, live_port = free_port(), free_port()
     env = {**os.environ, 'MEETINGS_DATA': str(tmp_path), 'TINFOIL_API_KEY': 'fixture-key', 'MIZEL_LIVE_DRY': '1',
            'MIZEL_LIVE_PORT': str(live_port), 'MIZEL_LIVE_UPSTREAM_PORT': str(app_port),

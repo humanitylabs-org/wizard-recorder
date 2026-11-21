@@ -15,12 +15,9 @@ were left out.
 The Recorder image ships this folder (Node binary, `tinfoil` and `ws` only) and
 `app/live_screen.py` runs it inside the same container on a loopback port. The app
 proxies `/live/` and the `/live/live` WebSocket to it, after its own host and
-origin checks. It is behind the app switch **Live screen** (`live-screen`, off by
-default, `GET/POST /api/switches`):
-
-- Off: nothing changes. `/` answers as before, `/live/` is 404 and no Node process runs.
-- On: `/` opens `live/`, and the service runs (also while the page is closed, for
-  phone follow mode and finished recordings). Off again stops it.
+origin checks. It is the Recorder's screen for everyone (its old `live-screen`
+switch was removed): `/` opens `live/`, and the service runs (also while the page is
+closed, for phone follow mode and finished recordings).
 
 ## Settings (all from the install, nothing owner-specific in code)
 

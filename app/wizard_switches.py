@@ -19,12 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-SWITCHES = [
-    {'id': 'live-screen', 'name': 'Live screen',
-     'description': 'Open the Recorder with its full screen: live words while you record, Ask cards, a live summary, '
-                    'playback, transcript and outline. Needs a live words key in the app settings.',
-     'default': False, 'issues': ['humanitylabs-org/wizard-recorder#1']},
-]
+SWITCHES = []  # Live screen (issue #1) is on for everyone now; its switch is gone.
 CONTRACT = 'wizard.app-switches/1'
 _LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
 _lock = threading.Lock()
@@ -126,11 +121,32 @@ def _owner(h, write, method='GET', target=''):
     return len(logins) == 1 and '@' in logins[0] and (not owners or logins[0].strip().lower() in owners)
 
 
+def prune_saved():
+    """Drop stored values for switches that no longer exist (a removed switch leaves no state behind)."""
+    with _lock:
+        saved = _saved()
+        ids = {x['id'] for x in SWITCHES}
+        keep = {k: v for k, v in saved.items() if k in ids and isinstance(v, bool)}
+        if keep == saved:
+            return
+        f = _file()
+        try:
+            if keep:
+                tmp = f.with_name(f.name + '.tmp')
+                tmp.write_text(json.dumps(keep))
+                os.replace(tmp, f)
+            else:
+                f.unlink()
+        except OSError:
+            pass
+
+
 def install_switches(app, data_dir=None, path='/api/switches'):
     """Add GET/POST <path> to a FastAPI/Starlette app."""
     from fastapi import Request
     from fastapi.responses import JSONResponse
     _dir['path'] = data_dir
+    prune_saved()
     nocache = {'Cache-Control': 'no-store'}
 
     @app.get(path, include_in_schema=False)

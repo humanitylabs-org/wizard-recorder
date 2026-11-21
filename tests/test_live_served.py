@@ -1,4 +1,4 @@
-"""The Recorder serves its live screen behind the off-by-default `live-screen` switch (issue #1)."""
+"""The Recorder serves its live screen for everyone (issue #1; its `live-screen` switch was removed)."""
 import asyncio
 import json
 import os
@@ -31,33 +31,27 @@ def clean_env():
             os.environ[k] = v
 
 
-def switch(tmp_path, on):
-    (tmp_path / 'switches.json').write_text(json.dumps({'live-screen': on}))
+def test_switch_is_gone_and_its_stored_value_is_cleared(tmp_path):
+    (tmp_path / 'switches.json').write_text(json.dumps({'live-screen': False}))
 
-
-def test_switch_is_declared_off_by_default_with_its_issue(tmp_path):
     async def test(s, c):
         import wizard_switches
-        sw = {x['id']: x for x in wizard_switches.switches_doc()['switches']}['live-screen']
-        assert sw['on'] is False and sw['default'] is False
-        assert sw['issues'] == ['humanitylabs-org/wizard-recorder#1']
+        assert wizard_switches.switches_doc()['switches'] == []
+        assert not (tmp_path / 'switches.json').exists()
     run_test(tmp_path, test)
 
 
-def test_off_keeps_the_old_answers_and_starts_nothing(tmp_path):
+def test_an_old_off_value_no_longer_hides_the_screen(tmp_path):
+    (tmp_path / 'switches.json').write_text(json.dumps({'live-screen': False}))
+
     async def test(s, c):
         r = await c.get('/')
-        assert r.status_code == 200 and r.json()['app'] == 'mizel'
-        for path in ('/live', '/live/', '/live/app.js', '/live/live-health'):
-            r = await c.get(path)
-            assert r.status_code == 404 and r.json()['code'] == 'switch_off', path
-        assert not s.live_screen.runner.running()
-    run_test(tmp_path, test, {'TINFOIL_API_KEY': 'fixture-key'})
+        assert r.status_code == 302 and r.headers['location'] == 'live/'
+        assert (await c.get('/live/')).status_code == 503
+    run_test(tmp_path, test)
 
 
-def test_on_without_a_key_says_what_is_missing(tmp_path):
-    switch(tmp_path, True)
-
+def test_without_a_key_says_what_is_missing(tmp_path):
     async def test(s, c):
         r = await c.get('/')
         assert r.status_code == 302 and r.headers['location'] == 'live/'
@@ -106,7 +100,6 @@ def test_on_serves_the_screen_through_the_app(tmp_path):
     if not node_ready():
         pytest.skip('node >= 22 with live/ dependencies not available')
     import websockets
-    switch(tmp_path, True)
     app_port, live_port = free_port(), free_port()
     env = {**os.environ, 'MEETINGS_DATA': str(tmp_path), 'TINFOIL_API_KEY': 'fixture-key', 'MIZEL_LIVE_DRY': '1',
            'MIZEL_AGENT_NAME': 'Ada', 'MEETINGS_TIMEZONE': 'Europe/Lisbon', 'MIZEL_LIVE_PORT': str(live_port),
@@ -148,18 +141,6 @@ def test_on_serves_the_screen_through_the_app(tmp_path):
                 with pytest.raises(websockets.ConnectionClosed):
                     await asyncio.wait_for(ws.recv(), 10)
         asyncio.run(sockets())
-        # Off again: the screen goes away and the Node service stops.
-        switch(tmp_path, False)
-        assert httpx.get(base + '/live/').status_code == 404
-        assert httpx.get(base + '/', follow_redirects=False).status_code == 200
-        for _ in range(50):
-            try:
-                socket.create_connection(('127.0.0.1', live_port), timeout=0.2).close()
-                time.sleep(0.1)
-            except OSError:
-                break
-        else:
-            raise AssertionError('live service still listening after the switch went off')
     finally:
         srv.terminate()
         srv.wait(10)

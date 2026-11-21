@@ -70,7 +70,7 @@
       "env_variable": "TINFOIL_API_KEY",
       "required": false,
       "default": "",
-      "hint": "Tinfoil API key for live words and the live summary on the Live screen (turn it on in Try changes). Blank leaves the live screen unconfigured."
+      "hint": "Tinfoil API key for live words and the live summary on the live screen. Blank leaves the live screen unconfigured."
     },
     {
       "type": "text",

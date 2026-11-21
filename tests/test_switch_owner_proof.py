@@ -108,7 +108,7 @@ def test_unreadable_key_refuses_and_never_falls_back(client, tmp_path, monkeypat
 
 def test_manifest_declares_owner_proof():
     # wizard-os#133: the App Manager mints the proof key only for an app that declares it; until then the
-    # live-screen switch falls back to the Serve-login check, which any process on the box can forge.
+    # app's switches fall back to the Serve-login check, which any process on the box can forge.
     from pathlib import Path
     front = (Path(__file__).resolve().parents[1] / 'wizard.md').read_text().split('---')[1]
     assert any(l.split('#')[0].strip() == 'owner_proof: hmac-v1' for l in front.splitlines())

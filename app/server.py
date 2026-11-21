@@ -1342,22 +1342,16 @@ async def delete_meeting(mid: str):
 
 from package_routes import install_routes
 install_routes(app)
-from wizard_switches import install_switches, switch_on  # wizard.app-switches/1 (Tracker Try it)
+from wizard_switches import install_switches  # wizard.app-switches/1 (Tracker Try it), empty list today
 install_switches(app, DATA)
-import live_screen  # noqa: E402  the live screen (issue #1), behind the off-by-default "live-screen" switch
-live_screen.install(app, data=DATA, switch_on=switch_on, host_ok=_host_ok, allowed_origins=ALLOWED_ORIGINS)
+import live_screen  # noqa: E402  the live screen (issue #1), the Recorder's screen for everyone
+live_screen.install(app, data=DATA, host_ok=_host_ok, allowed_origins=ALLOWED_ORIGINS)
 
 
 @app.get("/")
-async def index(request: Request):
-    raw = request.scope.get("raw_path", b"").decode()
-    if switch_on(live_screen.SWITCH):
-        return RedirectResponse("live/", status_code=302)  # relative: works under any ingress prefix; keeps #/m/<id>
-    # The old Meetings view is retired: Recorder has one view, Recorder Live (/mizel-live/). Its hash routes
-    # (#/m/<id>) match, and the browser carries the hash across the redirect. This server stays the API.
-    if not os.environ.get("MEETINGS_EXTERNAL_VIEW"):
-        return JSONResponse({"app":"mizel", "api":"/api", "mcp":"/mcp", "view":"Use the installed Recorder Live view or native recorder."})
-    return RedirectResponse(os.environ["MEETINGS_EXTERNAL_VIEW"], status_code=302)
+async def index():
+    # Relative: works under any ingress prefix; the browser keeps #/m/<id> across the redirect.
+    return RedirectResponse("live/", status_code=302)
 
 
 @app.get("/{name}")

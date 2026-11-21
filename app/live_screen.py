@@ -1,12 +1,11 @@
-"""The Recorder live screen (issue #1), served by this app behind the off-by-default `live-screen` switch.
+"""The Recorder live screen (issue #1), served by this app: it is the Recorder's screen for everyone.
 
 live/ is the screen James uses every day (live words, Ask cards, live summary, close recovery, Appearance v1). It is a
 small Node service; this module runs it inside the Recorder container on a loopback port and proxies `/live/` (HTTP and
 the `/live/live` WebSocket) to it, so the normal store install serves it and no separate host service is needed.
 
-Off (the default): nothing changes. `/` answers as before, `/live/` is 404 and no Node process runs.
-On: `/` redirects to `live/`, and the Node service starts (it also keeps running for phone follow mode and finished
-recordings while the page is closed). Turning the switch off stops it.
+`/` redirects to `live/`, and the Node service starts at boot once its settings are there (it also keeps running for
+phone follow mode and finished recordings while the page is closed).
 
 Everything owner-specific comes from the install, never from code: the realtime key and models, the main agent's name
 and endpoint, the time zone and the owner name (see runtipi/config.json form fields).
@@ -28,7 +27,6 @@ from fastapi import Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-SWITCH = 'live-screen'
 BASE = '/live'
 HOP = {'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-authorization',
        'proxy-authenticate', 'host', 'content-length', 'origin', 'cookie', 'authorization', 'referer'}
@@ -149,12 +147,8 @@ def opaque_asset(method: str, headers, rest: str) -> bool:
     return method in ('GET', 'HEAD') and headers.get('origin') == 'null' and bool(ASSET.fullmatch(rest))
 
 
-def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
-    """Add the switch-gated /live/ proxy, the /live/live WebSocket and the watchdog to the FastAPI app."""
-    def off():
-        return JSONResponse({'error': 'The live screen is off. Turn on "Live screen" in this app\'s Try changes.',
-                             'code': 'switch_off', 'switch': SWITCH}, 404)
-
+def install(app, *, data: Path, host_ok, allowed_origins):
+    """Add the /live/ proxy, the /live/live WebSocket and the watchdog to the FastAPI app."""
     def needs(what):
         items = ''.join(f'<li>{w}</li>' for w in what)
         return HTMLResponse('<!doctype html><meta charset="utf-8"><title>Recorder</title><h1>Live screen not ready</h1>'
@@ -163,7 +157,7 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
 
     @app.get(BASE, include_in_schema=False)
     async def live_slash():
-        return RedirectResponse('live/', 308) if switch_on(SWITCH) else off()
+        return RedirectResponse('live/', 308)
 
     methods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']
 
@@ -173,9 +167,6 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
 
     @app.api_route(BASE + '/{rest:path}', methods=methods, include_in_schema=False)
     async def live_proxy(rest: str, request: Request):
-        if not switch_on(SWITCH):
-            runner.stop()
-            return off()
         if not await runner.ensure(data):
             return needs(missing() or [runner.error or 'a restart of the app'])
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
@@ -204,7 +195,7 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
 
     @app.websocket(BASE + '/live')
     async def live_socket(ws: WebSocket):
-        if not switch_on(SWITCH) or not host_ok(ws.headers) or not ws.headers.get('origin') \
+        if not host_ok(ws.headers) or not ws.headers.get('origin') \
                 or not origin_ok(ws.headers, allowed_origins):
             await ws.close(code=1008)
             return
@@ -248,14 +239,11 @@ def install(app, *, data: Path, switch_on, host_ok, allowed_origins):
                 await ws.close()
 
     async def watchdog():
-        # Starts the service at boot when the switch is on (phone follow mode, finished recordings), stops it when off.
+        # Starts the service at boot (phone follow mode, finished recordings) and restarts it if it stops.
         while True:
             with contextlib.suppress(Exception):
-                if switch_on(SWITCH):
-                    if not runner.running() and not missing():
-                        await runner.ensure(data)
-                elif runner.running():
-                    runner.stop()
+                if not runner.running() and not missing():
+                    await runner.ensure(data)
             await asyncio.sleep(10)
 
     @app.on_event('startup')

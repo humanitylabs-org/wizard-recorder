@@ -5,7 +5,7 @@ from test_package import run_test
 
 def test_full_transcript_pagination_and_search_all_meetings(tmp_path):
     async def test(s,c):
-        assert (await c.get('/')).json()['app'] == 'mizel'
+        assert (await c.get('/')).headers['location'] == 'live/'
         for prefix in ('', '/meetings'):
             assert (await c.get(prefix+'/healthz')).json()['ok'] is True
             assert (await c.get(prefix+'/api/meetings')).json() == {'meetings': []}

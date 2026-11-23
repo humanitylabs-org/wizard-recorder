@@ -1,0 +1,2 @@
+/* Recorder's Ready extension (shell.js) draws nothing in the shell: its waiting meetings reach Ready through
+ * the app's inbox feed. The contract still loads one style sheet, so this one is empty on purpose. */

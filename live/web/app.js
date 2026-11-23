@@ -1979,14 +1979,38 @@ async function pumpDeliveries() {
   try {
     const { due = [] } = await api('deliveries/due');
     for (const d of due) {
+      // Another device is sending it, or the last try failed moments ago: the next try waits (issue 29).
+      if (d.sending || (d.failedAt && Date.now() - Date.parse(d.failedAt) < 5 * 60 * 1000)) continue;
       try { await deviceDeliver(d.meetingId, d.agent); routeCache.delete(d.meetingId); }
-      catch (e) { if (e?.status !== 409) console.warn('Recorder delivery failed', d.meetingId, errMsg(e)); }
+      catch (e) { if (e?.status !== 409 && e?.status !== 410) console.warn('Recorder delivery failed', d.meetingId, errMsg(e)); }
       if (state.current?.id === d.meetingId) void renderRoute(state.current);
     }
   } catch { /* offline: next tick */ }
   finally { pumping = false; }
 }
-void pumpDeliveries();
+// Opened from the owner's Ready item ("Meeting ready to send to …", app/server.py /api/inbox): send that meeting now,
+// even if the last automatic try failed moments ago (issue 29).
+async function sendOpenedDelivery() {
+  const mid = new URLSearchParams(location.search).get('send');
+  if (!mid || !/^[A-Za-z0-9_-]{3,64}$/.test(mid)) return;
+  try { history.replaceState(history.state, '', location.pathname + location.hash); } catch { /* keep the address */ }
+  pumping = true;   // the background pump waits, so this page never races itself for the same meeting
+  let agent = 'private';
+  try {
+    const { due = [] } = await api('deliveries/due');
+    const d = due.find((x) => x.meetingId === mid);
+    if (!d) return;
+    agent = d.agent;
+    await deviceDeliver(mid, agent); routeCache.delete(mid);
+    toast(`Sent to ${agentName(agent)}`);
+  } catch (e) {
+    if (e?.status !== 410) toast(e?.status === 409 ? 'Another device is sending it right now' : `Didn’t reach ${agentName(agent)}: ${errMsg(e)}`, { error: true });
+  } finally {
+    pumping = false;
+    if (state.current?.id === mid) void renderRoute(state.current);
+  }
+}
+void sendOpenedDelivery().finally(() => void pumpDeliveries());
 setInterval(() => { void pumpDeliveries(); if (state.current && !els.docRoute.hidden) void renderRoute(state.current); }, 15000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void pumpDeliveries(); });
 function openManualAsk(meetingId) {

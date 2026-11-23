@@ -308,7 +308,19 @@ async function deliverFinished() {
     if (send.status === 'sent' || tries >= 3) { state.delivered[m.id] = send.id; save(); }
   }
 }
-setInterval(() => void deliverFinished().catch((e) => logEvent('finish.error', { error: String(e?.message || e).slice(0, 200) })), FINISH_POLL_MS).unref();
+// A due delivery whose recording is gone (deleted, or never kept) can never be sent: drop it (issue 29).
+function dropDue(mid, reason) {
+  if (!state.due?.[mid]) return;
+  delete state.due[mid]; if (state.leases?.[mid]) delete state.leases[mid]; save();
+  logEvent('finish.dropped', { meetingId: mid, reason });
+}
+async function pruneDue() {
+  for (const mid of Object.keys(state.due || {})) {
+    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(10000) }); if (r.status === 404) dropDue(mid, 'recording missing'); }
+    catch { /* service unreachable: keep it, next tick */ }
+  }
+}
+setInterval(() => void deliverFinished().then(pruneDue).catch((e) => logEvent('finish.error', { error: String(e?.message || e).slice(0, 200) })), FINISH_POLL_MS).unref();
 
 const publicSend = (x) => ({ id: x.id, meetingId: x.meetingId, agent: x.agent, agentLabel: x.agentLabel, note: x.note || '', status: x.status, error: x.error || null,
   threadId: x.threadId || null, createdAt: x.createdAt, segments: x.segments || 0, auto: !!x.auto, via: x.via || 'server' });
@@ -701,7 +713,9 @@ const server = http.createServer(async (req, res) => {
   }
   // Device delivery: agents this server may not open (the private agent) are sent by the owner's own Recorder client.
   if (p === '/deliveries/due' && req.method === 'GET') {
-    const due = Object.entries(state.due || {}).filter(([mid, d]) => d.agent && d.agent !== 'none' && !state.delivered?.[mid]).map(([mid, d]) => ({ meetingId: mid, agent: d.agent }));
+    // at: when it became due; failedAt/error: the last device attempt that didn't reach the agent (senders wait before retrying).
+    const due = Object.entries(state.due || {}).filter(([mid, d]) => d.agent && d.agent !== 'none' && !state.delivered?.[mid])
+      .map(([mid, d]) => ({ meetingId: mid, agent: d.agent, at: d.at || null, failedAt: d.failedAt || null, error: d.error || null, sending: !!(state.leases?.[mid] && Date.now() - state.leases[mid].at < 120000) }));
     return sendRaw(res, 200, JSON.stringify({ due }), 'application/json');
   }
   if (p === '/deliveries/claim' && req.method === 'POST') {
@@ -714,14 +728,22 @@ const server = http.createServer(async (req, res) => {
     if (!manual && state.delivered?.[mid]) return sendRaw(res, 409, JSON.stringify({ error: 'Already sent' }), 'application/json');
     const lease = state.leases?.[mid];
     if (lease && Date.now() - lease.at < 120000) return sendRaw(res, 409, JSON.stringify({ error: 'Another device is sending it' }), 'application/json');
+    // Take the lease before reading the recording (an await), so two devices claiming at once never both send (issue 29).
+    const sendId = `send_${crypto.randomUUID()}`, leased = { at: Date.now(), sendId };
+    state.leases = { ...(state.leases || {}), [mid]: leased };
+    const unlease = () => { if (state.leases?.[mid] === leased) { delete state.leases[mid]; save(); } };
     const label = typeof msg.agentLabel === 'string' && msg.agentLabel.trim() ? msg.agentLabel.trim().slice(0, 60) : agentId;
     let meeting;
-    try { const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) throw new Error(String(r.status)); meeting = await r.json(); }
-    catch (e) { return sendRaw(res, 502, JSON.stringify({ error: `Recording unavailable (${e.message})` }), 'application/json'); }
+    try {
+      const r = await fetch(`http://${UP.host}:${UP.port}${UP.base}/api/meetings/${encodeURIComponent(mid)}`, { signal: AbortSignal.timeout(15000) });
+      if (r.status === 404) { unlease(); dropDue(mid, 'recording missing'); return sendRaw(res, 410, JSON.stringify({ error: 'Recording no longer exists' }), 'application/json'); }
+      if (!r.ok) throw new Error(String(r.status)); meeting = await r.json();
+    }
+    catch (e) { unlease(); return sendRaw(res, 502, JSON.stringify({ error: `Recording unavailable (${e.message})` }), 'application/json'); }
     const packet = transcriptPacket({ meeting, summary: summaryFor(mid), note: '', agentLabel: label });
     state.sends = state.sends || {};
-    const send = { id: `send_${crypto.randomUUID()}`, meetingId: mid, agent: agentId, agentLabel: label, note: '', auto: !manual, via: 'device', status: 'sending', createdAt: new Date().toISOString(), segments: packet.segments };
-    state.sends[send.id] = send; state.leases = { ...(state.leases || {}), [mid]: { at: Date.now(), sendId: send.id } }; save();
+    const send = { id: sendId, meetingId: mid, agent: agentId, agentLabel: label, note: '', auto: !manual, via: 'device', status: 'sending', createdAt: new Date().toISOString(), segments: packet.segments };
+    state.sends[send.id] = send; save();
     logEvent('device.claim', { sendId: send.id, meetingId: mid, agent: agentId, manual });
     return sendRaw(res, 200, JSON.stringify({ sendId: send.id, agent: agentId, title: threadTitle(packet.title, label), text: packet.text }), 'application/json');
   }
@@ -734,7 +756,10 @@ const server = http.createServer(async (req, res) => {
     if (typeof msg.threadId === 'string' && /^[A-Za-z0-9_.:-]{3,120}$/.test(msg.threadId)) {
       send.threadId = msg.threadId; send.runId = typeof msg.runId === 'string' ? msg.runId.slice(0, 120) : null; send.status = 'sent';
       state.delivered = { ...(state.delivered || {}), [send.meetingId]: send.id }; if (state.due) delete state.due[send.meetingId];
-    } else { send.status = 'failed'; send.error = `Didn't reach ${send.agentLabel}. ${String(msg.error || '').slice(0, 140)}`; }
+    } else {
+      send.status = 'failed'; send.error = `Didn't reach ${send.agentLabel}. ${String(msg.error || '').slice(0, 140)}`;
+      if (state.due?.[send.meetingId]) Object.assign(state.due[send.meetingId], { failedAt: new Date().toISOString(), error: send.error });
+    }
     save(); logEvent('device.result', { sendId: send.id, meetingId: send.meetingId, agent: send.agent, status: send.status });
     return sendRaw(res, 200, JSON.stringify({ send: publicSend(send) }), 'application/json');
   }

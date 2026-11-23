@@ -29,7 +29,7 @@ skill: SKILL.md
 view:
   path: /
   port: 8080
-provides: [meeting-recording, meeting-transcripts]
+provides: [meeting-recording, meeting-transcripts, ready-extension]   # ready-extension: the shell sends due Private-agent meetings (issue 29)
 system: false
 uses: [transcription]   # the App Manager links this app to the box's Transcription app, which answers as `transcriber` (issue 20)
 needs: [mic]

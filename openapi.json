@@ -132,6 +132,23 @@
         }
       }
     },
+    "/api/inbox": {
+      "get": {
+        "summary": "Inbox",
+        "operationId": "inbox_api_inbox_get",
+        "description": "WizardOS inbox feed v1: one item per finished meeting that has waited 10+ minutes to reach its agent (issue 29).",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/meetings/{mid}": {
       "get": {
         "summary": "Get Meeting",
@@ -846,6 +863,57 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready.json": {
+      "get": {
+        "summary": "Ready Json",
+        "operationId": "ready_json_ready_json_get",
+        "description": "wizard.ready-extension/1 declaration: digests of shell.js and shell.css (issue 29).",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shell.js": {
+      "get": {
+        "summary": "Shell Js",
+        "operationId": "shell_js_shell_js_get",
+        "description": "The shell's Ready extension module; only with ?sha256= of the exact bytes served.",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shell.css": {
+      "get": {
+        "summary": "Shell Css",
+        "operationId": "shell_css_shell_css_get",
+        "description": "The Ready extension's style sheet; only with ?sha256= of the exact bytes served.",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

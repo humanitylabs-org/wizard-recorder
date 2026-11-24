@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -r
 COPY app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY start.py /app/start.py
-COPY app/server.py app/package_routes.py app/wizard_switches.py app/live_screen.py app/audio_playback.py app/agent_delivery.py openapi.json /app/
+COPY app/server.py app/package_routes.py app/wizard_switches.py app/live_screen.py app/audio_playback.py app/agent_delivery.py app/ready_extension.py openapi.json /app/
+COPY ready /app/ready
 COPY --from=live /usr/local/bin/node /usr/local/bin/node
 COPY --from=live /live/node_modules /live/node_modules
 COPY live/package.json live/server.mjs live/provider.js live/agent-router.mjs live/orb-authority.mjs live/orb-events.mjs live/owner-identity.mjs /live/

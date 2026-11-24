@@ -1346,6 +1346,51 @@ from wizard_switches import install_switches  # wizard.app-switches/1 (Tracker T
 install_switches(app, DATA)
 import live_screen  # noqa: E402  the live screen (issue #1), the Recorder's screen for everyone
 live_screen.install(app, data=DATA, host_ok=_host_ok, allowed_origins=ALLOWED_ORIGINS)
+import ready_extension  # noqa: E402  the shell's Ready extension: sends due Private-agent meetings (issue 29)
+ready_extension.install(app)
+
+INBOX_AFTER_S = float(os.environ.get("MEETINGS_INBOX_AFTER_S", 10 * 60))   # unsent this long: one item in Ready (issue 29)
+AGENT_LABELS = {"private": "Private agent"}
+
+
+@app.get("/api/inbox")
+async def inbox():
+    """WizardOS inbox feed v1: one item per finished meeting that has waited 10+ minutes to reach its agent.
+
+    Those are sent from the owner's own device (the Private agent), normally within a minute by the shell's Ready
+    extension. An item here means that hasn't happened; opening it opens the meeting in Recorder, which sends it.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"http://127.0.0.1:{live_screen.port()}{live_screen.BASE}/deliveries/due")
+        due = r.json().get("due", []) if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError):
+        due = []
+    now = time.time()
+    items = []
+    with closing(db()) as c:
+        for d in due:
+            mid, at = str(d.get("meetingId") or ""), d.get("at")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{3,64}", mid) or not at:
+                continue
+            try:
+                since = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            if now - since < INBOX_AFTER_S:
+                continue
+            row = c.execute("SELECT title FROM meetings WHERE id=? AND deleted=0", (mid,)).fetchone()
+            if not row:
+                continue
+            agent = AGENT_LABELS.get(str(d.get("agent")), str(d.get("agent")))
+            text = f"\u201c{row[0] or 'Meeting'}\u201d finished and hasn\u2019t reached your {agent} yet. Open it in Recorder to send it now."
+            if d.get("error"):
+                why = re.sub(r"^Didn.t reach [^.]*\.\s*", "", str(d["error"]))[:200] or "no answer"
+                text += f" Last try: {why}"
+            items.append({"key": f"deliver:{mid}", "title": f"Meeting ready to send to {agent}", "text": text,
+                          "time": int(since), "priority": 4,
+                          "open": f"live/?send={mid}#/m/{mid}"})
+    return {"inbox": 1, "items": items}
 
 
 @app.get("/")

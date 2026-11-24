@@ -8,6 +8,9 @@
 !openapi.json
 !app/wizard_switches.py
 !app/live_screen.py
+!app/ready_extension.py
+!ready/shell.js
+!ready/shell.css
 !live/package.json
 !live/package-lock.json
 !live/server.mjs

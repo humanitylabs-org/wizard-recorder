@@ -9,7 +9,7 @@ tags: [audio, productivity]
 privacy: private
 # Private app: recordings and transcripts are not readable by public agents.
 personal_data: reads your recordings and meeting transcripts   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
-version: 0.2.10
+version: 0.2.11
 summary: Record meetings, upload audio, keep notes and search transcripts using the shared transcriber.
 icon: icon.png
 license: GPL-3.0-only
